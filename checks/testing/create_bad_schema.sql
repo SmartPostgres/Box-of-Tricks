@@ -2,9 +2,9 @@ drop table if exists public.users cascade;
 
 
 CREATE TABLE public.users (
-    user_id SERIAL PRIMARY KEY,
+    user_id SERIAL PRIMARY KEY, /* Creates a row in pg_class */
     display_name VARCHAR(100) NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL, /* Creates a row in pg_class */
     reputation INTEGER DEFAULT 0,
     creation_date TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     last_access_date TIMESTAMPTZ,
@@ -101,6 +101,23 @@ CREATE SEQUENCE public.user_sequence
     CACHE 1;
 
 
+   
+drop table if exists public.toast_big_data cascade;
+   
+CREATE TABLE public.toast_big_data (
+    toast_big_data_id SERIAL PRIMARY KEY, /* Creates a row in pg_class */
+    giant_value_1 VARCHAR,
+    giant_value_2 VARCHAR
+);
+
+INSERT INTO public.toast_big_data
+(giant_value_1, giant_value_2)
+select REPEAT('Malkovich ', 10000), REPEAT('Malkovich ', 10000)
+from generate_series(1,10000);   
+      
+
+   
+   
 
 drop schema if exists duplicate CASCADE;
 
@@ -193,3 +210,19 @@ CREATE SEQUENCE duplicate.user_sequence
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
+
+ drop table if exists duplicate.toast_big_data cascade;
+   
+CREATE TABLE duplicate.toast_big_data (
+    toast_big_data_id SERIAL PRIMARY KEY, /* Creates a row in pg_class */
+    giant_value_1 VARCHAR,
+    giant_value_2 VARCHAR
+);
+
+INSERT INTO duplicate.toast_big_data
+(giant_value_1, giant_value_2)
+select REPEAT('Malkovich ', 10000), REPEAT('Malkovich ', 10000)
+from generate_series(1,10000);   
+      
+
+   
