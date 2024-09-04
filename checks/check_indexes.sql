@@ -1,13 +1,27 @@
-/* create or replace function check_indexes (
-	database_name varchar,
-	schema_name varchar,
-	table_name varchar
+create or replace function check_indexes (
+	v_schema_name varchar,
+	v_table_name varchar
 )
+returns table (schema_name varchar, table_name varchar, index_name varchar, index_type varchar,
+	index_definition varchar, size_kb integer, estimated_tuples_from_pg_class_reltuples integer,
+	estimated_tuples_as_of timestamp with time zone, is_unique boolean, is_primary boolean,
+	table_oid integer, index_oid integer)
 language plpgsql
 as $$
-begin */
+begin
 
-/* Tables */
+create temporary table ci_indexes
+	(schema_name varchar, table_name varchar, index_name varchar, index_type varchar,
+	index_definition varchar, size_kb integer, estimated_tuples_from_pg_class_reltuples integer,
+	estimated_tuples_as_of timestamp with time zone, is_unique boolean, is_primary boolean,
+	table_oid integer, index_oid integer, relkind char);
+
+/* Tables & materialized views */
+insert into ci_indexes
+	(schema_name, table_name, index_name, index_type,
+	index_definition, size_kb, estimated_tuples_from_pg_class_reltuples,
+	estimated_tuples_as_of, is_unique, is_primary,
+	table_oid, index_oid, relkind)
 select
 	nm.nspname as schema_name,
 	c_tbl.relname as table_name,
@@ -23,7 +37,7 @@ select
 		when 'p' then 'partitioned table'
 		else 'unknown'	end as index_type,
 	NULL as index_definition,
-	pg_relation_size(c_tbl.oid) / 1024.0 / 1024 as size_mb,
+	pg_relation_size(c_tbl.oid) / 1024.0 as size_kb,
 	c_tbl.reltuples as estimated_tuples_from_pg_class_reltuples,
 	greatest(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) as estimated_tuples_as_of,
 	CAST(null as boolean) as is_unique,
@@ -37,7 +51,8 @@ select
 	NULL AS tuples_read,
 	NULL AS tuples_fetched, */
 	c_tbl.oid as table_oid,
-	cast(null as integer) as index_oid
+	cast(null as integer) as index_oid,
+	c_tbl.relkind
 from
 	pg_catalog.pg_class c_tbl
 join pg_catalog.pg_namespace nm on
@@ -48,19 +63,21 @@ left outer join
 where
 	/* c_tbl.relname = 'toast_big_data' and */
 	nm.nspname in ('duplicate', 'public')
-	and c_tbl.relkind not in ('i', 'I')	
-
-
-union all
+	and c_tbl.relkind not in ('i', 'I', 't');	
 
 /* TOAST Tables */
+insert into ci_indexes
+	(schema_name, table_name, index_name, index_type,
+	index_definition, size_kb, estimated_tuples_from_pg_class_reltuples,
+	estimated_tuples_as_of, is_unique, is_primary,
+	table_oid, index_oid, relkind)
 select
 	nm.nspname as schema_name,
 	c_tbl.relname as table_name,
 	c_toast_tbl.relname as index_name,
 	'toast' as index_type,
 	NULL as index_definition,
-	pg_relation_size(c_toast_tbl.oid) / 1024.0 / 1024 as size_mb,
+	pg_relation_size(c_toast_tbl.oid) / 1024.0 as size_kb,
 	null as estimated_tuples_from_pg_class_reltuples,
 	null as estimated_tuples_as_of,
 	NULL as is_unique,
@@ -74,7 +91,8 @@ select
 	idx_tup_read AS tuples_read,
 	idx_tup_fetch AS tuples_fetched, */
 	c_tbl.oid as table_oid,
-	c_toast_tbl.oid as index_oid
+	c_toast_tbl.oid as index_oid,
+	c_toast_tbl.relkind as relkind
 from
 	pg_catalog.pg_class c_tbl
 join pg_catalog.pg_namespace nm on
@@ -85,18 +103,21 @@ join
 where
 	/* c_tbl.relname = 'toast_big_data' and */
 	nm.nspname in ('duplicate', 'public')
-	and c_tbl.relkind not in ('i', 'I')	
+	and c_tbl.relkind not in ('i', 'I');	
 	
-union all
-
 /* Indexes */
+insert into ci_indexes
+	(schema_name, table_name, index_name, index_type,
+	index_definition, size_kb, estimated_tuples_from_pg_class_reltuples,
+	estimated_tuples_as_of, is_unique, is_primary,
+	table_oid, index_oid, relkind)
 select
 	nm.nspname as schema_name,
 	c_tbl.relname as table_name,
 	c_ix.relname as index_name,
 	am.amname as index_type,
 	pg_get_indexdef(c_ix.oid) as index_definition,
-	pg_relation_size(i.indexrelid) / 1024.0 / 1024 as size_mb,
+	pg_relation_size(i.indexrelid) / 1024.0 as size_kb,
 	coalesce(c_ix.reltuples, c_tbl.reltuples) as estimated_tuples_from_pg_class_reltuples,
 	greatest(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) as estimated_tuples_as_of,
 	indisunique as is_unique,
@@ -110,7 +131,8 @@ select
 	idx_tup_read AS tuples_read,
 	idx_tup_fetch AS tuples_fetched, */
 	c_tbl.oid as table_oid,
-	c_ix.oid as index_oid
+	c_ix.oid as index_oid,
+	c_ix.relkind
 from
 	pg_catalog.pg_class c_tbl
 join pg_catalog.pg_namespace nm on
@@ -133,9 +155,17 @@ left outer join
 where
 	/* c_tbl.relname = 'toast_big_data' and */
 	nm.nspname in ('duplicate', 'public')
-	and c_tbl.relkind not in ('i', 'I')	
-ORDER by 1, 2, 3;
+	and c_tbl.relkind not in ('i', 'I');
 	
+return query
+	select ci.schema_name, ci.table_name, ci.index_name, ci.index_type,
+	ci.index_definition, ci.size_kb, ci.estimated_tuples_from_pg_class_reltuples,
+	ci.estimated_tuples_as_of, ci.is_unique, ci.is_primary,
+	ci.table_oid, ci.index_oid
+	from ci_indexes ci
+	order by 1, 2, 3;
 
-/* end;$$; */
 
+drop table ci_indexes;
+end;
+$$;
