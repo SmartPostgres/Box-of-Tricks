@@ -1,171 +1,165 @@
-create or replace function check_indexes (
-	v_schema_name varchar,
-	v_table_name varchar
+CREATE OR REPLACE FUNCTION check_indexes (
+    v_schema_name VARCHAR,
+    v_table_name VARCHAR
 )
-returns table (schema_name varchar, table_name varchar, index_name varchar, index_type varchar,
-	index_definition varchar, size_kb integer, estimated_tuples_from_pg_class_reltuples integer,
-	estimated_tuples_as_of timestamp with time zone, is_unique boolean, is_primary boolean,
-	table_oid integer, index_oid integer)
-language plpgsql
-as $$
-begin
+RETURNS TABLE (
+    schema_name VARCHAR,
+    table_name VARCHAR,
+    index_name VARCHAR,
+    index_type VARCHAR,
+    index_definition VARCHAR,
+    size_kb INTEGER,
+    estimated_tuples_from_pg_class_reltuples INTEGER,
+    estimated_tuples_as_of TIMESTAMPTZ,
+    is_unique BOOLEAN,
+    is_primary BOOLEAN,
+    table_oid INTEGER,
+    index_oid INTEGER
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    sql_tables_views TEXT;
+    sql_toast_tables TEXT;
+    sql_indexes TEXT;
+BEGIN
+    CREATE TEMPORARY TABLE ci_indexes
+    (
+        schema_name VARCHAR,
+        table_name VARCHAR,
+        index_name VARCHAR,
+        index_type VARCHAR,
+        index_definition VARCHAR,
+        size_kb INTEGER,
+        estimated_tuples_from_pg_class_reltuples INTEGER,
+        estimated_tuples_as_of TIMESTAMPTZ,
+        is_unique BOOLEAN,
+        is_primary BOOLEAN,
+        table_oid INTEGER,
+        index_oid INTEGER,
+        relkind CHAR
+    );
 
-create temporary table ci_indexes
-	(schema_name varchar, table_name varchar, index_name varchar, index_type varchar,
-	index_definition varchar, size_kb integer, estimated_tuples_from_pg_class_reltuples integer,
-	estimated_tuples_as_of timestamp with time zone, is_unique boolean, is_primary boolean,
-	table_oid integer, index_oid integer, relkind char);
+    -- Build SQL for Tables & Materialized Views
+    sql_tables_views := '
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, is_unique, is_primary, table_oid, index_oid, relkind)
+    SELECT
+        nm.nspname AS schema_name,
+        c_tbl.relname AS table_name,
+        NULL AS index_name,
+        CASE c_tbl.relkind
+            WHEN ''r'' THEN ''ordinary table''
+            WHEN ''S'' THEN ''sequence''
+            WHEN ''t'' THEN ''TOAST table''
+            WHEN ''v'' THEN ''view'' 
+            WHEN ''m'' THEN ''materialized view'' 
+            WHEN ''c'' THEN ''composite type'' 
+            WHEN ''f'' THEN ''foreign table'' 
+            WHEN ''p'' THEN ''partitioned table''
+            ELSE ''unknown''
+        END AS index_type,
+        NULL AS index_definition,
+        pg_relation_size(c_tbl.oid) / 1024.0 AS size_kb,
+        c_tbl.reltuples AS estimated_tuples_from_pg_class_reltuples,
+        GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
+        CAST(NULL AS BOOLEAN) AS is_unique,
+        CAST(NULL AS BOOLEAN) AS is_primary,
+        c_tbl.oid AS table_oid,
+        CAST(NULL AS INTEGER) AS index_oid,
+        c_tbl.relkind
+    FROM
+        pg_catalog.pg_class c_tbl
+    JOIN pg_catalog.pg_namespace nm ON
+        c_tbl.relnamespace = nm.oid
+    LEFT JOIN
+        pg_catalog.pg_stat_user_tables stat ON
+        stat.relid = c_tbl.oid
+    WHERE
+        nm.nspname IN (''duplicate'', ''public'')
+        AND c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
 
-/* Tables & materialized views */
-insert into ci_indexes
-	(schema_name, table_name, index_name, index_type,
-	index_definition, size_kb, estimated_tuples_from_pg_class_reltuples,
-	estimated_tuples_as_of, is_unique, is_primary,
-	table_oid, index_oid, relkind)
-select
-	nm.nspname as schema_name,
-	c_tbl.relname as table_name,
-	NULL as index_name,
-	case c_tbl.relkind
-		when 'r' then 'ordinary table'
-		when 'S' then 'sequence'
-		when 't' then 'TOAST table'
-		when 'v' then 'view' 
-		when 'm' then 'materialized view' 
-		when 'c' then 'composite type' 
-		when 'f' then 'foreign table' 
-		when 'p' then 'partitioned table'
-		else 'unknown'	end as index_type,
-	NULL as index_definition,
-	pg_relation_size(c_tbl.oid) / 1024.0 as size_kb,
-	c_tbl.reltuples as estimated_tuples_from_pg_class_reltuples,
-	greatest(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) as estimated_tuples_as_of,
-	CAST(null as boolean) as is_unique,
-	CAST(null as boolean) as is_primary,
-	/* When we implement a Warnings column, these will be useful for diagnosing vacuum & analyze issues
-	stat.n_ins_since_vacuum,
-	stat.n_live_tup as tbl_n_live_tup,
-	stat.n_dead_tup as tbl_n_dead_tup,
-	stat.n_mod_since_analyze as tbl_n_mod_since_analyze,
-	NULL AS number_of_scans,
-	NULL AS tuples_read,
-	NULL AS tuples_fetched, */
-	c_tbl.oid as table_oid,
-	cast(null as integer) as index_oid,
-	c_tbl.relkind
-from
-	pg_catalog.pg_class c_tbl
-join pg_catalog.pg_namespace nm on
-	c_tbl.relnamespace = nm.oid
-left outer join
-    pg_catalog.pg_stat_user_tables stat on
-	stat.relid = c_tbl.oid
-where
-	/* c_tbl.relname = 'toast_big_data' and */
-	nm.nspname in ('duplicate', 'public')
-	and c_tbl.relkind not in ('i', 'I', 't');	
+    -- Build SQL for TOAST Tables
+    sql_toast_tables := '
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, is_unique, is_primary, table_oid, index_oid, relkind)
+    SELECT
+        nm.nspname AS schema_name,
+        c_tbl.relname AS table_name,
+        c_toast_tbl.relname AS index_name,
+        ''toast'' AS index_type,
+        NULL AS index_definition,
+        pg_relation_size(c_toast_tbl.oid) / 1024.0 AS size_kb,
+        NULL AS estimated_tuples_from_pg_class_reltuples,
+        NULL AS estimated_tuples_as_of,
+        NULL AS is_unique,
+        NULL AS is_primary,
+        c_tbl.oid AS table_oid,
+        c_toast_tbl.oid AS index_oid,
+        c_toast_tbl.relkind AS relkind
+    FROM
+        pg_catalog.pg_class c_tbl
+    JOIN pg_catalog.pg_namespace nm ON
+        c_tbl.relnamespace = nm.oid
+    JOIN 
+        pg_catalog.pg_class c_toast_tbl
+        ON c_tbl.reltoastrelid = c_toast_tbl.oid
+    WHERE
+        nm.nspname IN (''duplicate'', ''public'')
+        AND c_tbl.relkind NOT IN (''i'', ''I'');';
 
-/* TOAST Tables */
-insert into ci_indexes
-	(schema_name, table_name, index_name, index_type,
-	index_definition, size_kb, estimated_tuples_from_pg_class_reltuples,
-	estimated_tuples_as_of, is_unique, is_primary,
-	table_oid, index_oid, relkind)
-select
-	nm.nspname as schema_name,
-	c_tbl.relname as table_name,
-	c_toast_tbl.relname as index_name,
-	'toast' as index_type,
-	NULL as index_definition,
-	pg_relation_size(c_toast_tbl.oid) / 1024.0 as size_kb,
-	null as estimated_tuples_from_pg_class_reltuples,
-	null as estimated_tuples_as_of,
-	NULL as is_unique,
-	NULL as is_primary,
-	/* When we implement a Warnings column, these will be useful for diagnosing vacuum & analyze issues
-	stat.n_ins_since_vacuum,
-	stat.n_live_tup as tbl_n_live_tup,
-	stat.n_dead_tup as tbl_n_dead_tup,
-	stat.n_mod_since_analyze as tbl_n_mod_since_analyze,
-	idx_scan AS number_of_scans,
-	idx_tup_read AS tuples_read,
-	idx_tup_fetch AS tuples_fetched, */
-	c_tbl.oid as table_oid,
-	c_toast_tbl.oid as index_oid,
-	c_toast_tbl.relkind as relkind
-from
-	pg_catalog.pg_class c_tbl
-join pg_catalog.pg_namespace nm on
-	c_tbl.relnamespace = nm.oid
-join 
-	pg_catalog.pg_class c_toast_tbl
-	on c_tbl.reltoastrelid = c_toast_tbl.oid
-where
-	/* c_tbl.relname = 'toast_big_data' and */
-	nm.nspname in ('duplicate', 'public')
-	and c_tbl.relkind not in ('i', 'I');	
-	
-/* Indexes */
-insert into ci_indexes
-	(schema_name, table_name, index_name, index_type,
-	index_definition, size_kb, estimated_tuples_from_pg_class_reltuples,
-	estimated_tuples_as_of, is_unique, is_primary,
-	table_oid, index_oid, relkind)
-select
-	nm.nspname as schema_name,
-	c_tbl.relname as table_name,
-	c_ix.relname as index_name,
-	am.amname as index_type,
-	pg_get_indexdef(c_ix.oid) as index_definition,
-	pg_relation_size(i.indexrelid) / 1024.0 as size_kb,
-	coalesce(c_ix.reltuples, c_tbl.reltuples) as estimated_tuples_from_pg_class_reltuples,
-	greatest(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) as estimated_tuples_as_of,
-	indisunique as is_unique,
-	indisprimary as is_primary,
-	/* When we implement a Warnings column, these will be useful for diagnosing vacuum & analyze issues
-	stat.n_ins_since_vacuum,
-	stat.n_live_tup as tbl_n_live_tup,
-	stat.n_dead_tup as tbl_n_dead_tup,
-	stat.n_mod_since_analyze as tbl_n_mod_since_analyze,
-	idx_scan AS number_of_scans,
-	idx_tup_read AS tuples_read,
-	idx_tup_fetch AS tuples_fetched, */
-	c_tbl.oid as table_oid,
-	c_ix.oid as index_oid,
-	c_ix.relkind
-from
-	pg_catalog.pg_class c_tbl
-join pg_catalog.pg_namespace nm on
-	c_tbl.relnamespace = nm.oid
-join 
-	pg_catalog.pg_index i on
-	c_tbl.oid = i.indrelid
-join
-    pg_catalog.pg_class c_ix on
-	i.indexrelid = c_ix.oid
-left outer join
-    pg_catalog.pg_am am on
-	am.oid = c_ix.relam
-left outer join
-    pg_catalog.pg_stat_all_indexes psai on
-	psai.indexrelid = i.indexrelid
-left outer join
-    pg_catalog.pg_stat_user_tables stat on
-	stat.relid = i.indrelid
-where
-	/* c_tbl.relname = 'toast_big_data' and */
-	nm.nspname in ('duplicate', 'public')
-	and c_tbl.relkind not in ('i', 'I');
-	
-return query
-	select ci.schema_name, ci.table_name, ci.index_name, ci.index_type,
-	ci.index_definition, ci.size_kb, ci.estimated_tuples_from_pg_class_reltuples,
-	ci.estimated_tuples_as_of, ci.is_unique, ci.is_primary,
-	ci.table_oid, ci.index_oid
-	from ci_indexes ci
-	order by 1, 2, 3;
+    -- Build SQL for Indexes
+    sql_indexes := '
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, is_unique, is_primary, table_oid, index_oid, relkind)
+    SELECT
+        nm.nspname AS schema_name,
+        c_tbl.relname AS table_name,
+        c_ix.relname AS index_name,
+        am.amname AS index_type,
+        pg_get_indexdef(c_ix.oid) AS index_definition,
+        pg_relation_size(i.indexrelid) / 1024.0 AS size_kb,
+        COALESCE(c_ix.reltuples, c_tbl.reltuples) AS estimated_tuples_from_pg_class_reltuples,
+        GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
+        indisunique AS is_unique,
+        indisprimary AS is_primary,
+        c_tbl.oid AS table_oid,
+        c_ix.oid AS index_oid,
+        c_ix.relkind
+    FROM
+        pg_catalog.pg_class c_tbl
+    JOIN pg_catalog.pg_namespace nm ON
+        c_tbl.relnamespace = nm.oid
+    JOIN 
+        pg_catalog.pg_index i ON
+        c_tbl.oid = i.indrelid
+    JOIN
+        pg_catalog.pg_class c_ix ON
+        i.indexrelid = c_ix.oid
+    LEFT JOIN
+        pg_catalog.pg_am am ON
+        am.oid = c_ix.relam
+    LEFT JOIN
+        pg_catalog.pg_stat_all_indexes psai ON
+        psai.indexrelid = i.indexrelid
+    LEFT JOIN
+        pg_catalog.pg_stat_user_tables stat ON
+        stat.relid = i.indrelid
+    WHERE
+        nm.nspname IN (''duplicate'', ''public'')
+        AND c_tbl.relkind NOT IN (''i'', ''I'');';
 
+    -- Execute the dynamically built SQL statements
+    EXECUTE sql_tables_views;
+    EXECUTE sql_toast_tables;
+    EXECUTE sql_indexes;
 
-drop table ci_indexes;
-end;
+    -- Return the result set
+    RETURN QUERY
+    SELECT ci.schema_name, ci.table_name, ci.index_name, ci.index_type,
+           ci.index_definition, ci.size_kb, ci.estimated_tuples_from_pg_class_reltuples,
+           ci.estimated_tuples_as_of, ci.is_unique, ci.is_primary,
+           ci.table_oid, ci.index_oid
+    FROM ci_indexes ci
+    ORDER BY 1, 2, 3;
+
+    DROP TABLE ci_indexes;
+END;
 $$;
