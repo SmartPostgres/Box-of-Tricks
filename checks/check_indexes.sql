@@ -14,14 +14,13 @@ RETURNS TABLE (
     is_unique BOOLEAN,
     is_primary BOOLEAN,
     table_oid INTEGER,
-    index_oid INTEGER
+    index_oid INTEGER,
+    priority INTEGER, warning VARCHAR
 )
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    sql_tables_views TEXT;
-    sql_toast_tables TEXT;
-    sql_indexes TEXT;
+    sql_to_execute TEXT;
 BEGIN
     CREATE TEMPORARY TABLE ci_indexes
     (
@@ -37,12 +36,32 @@ BEGIN
         is_primary BOOLEAN,
         table_oid INTEGER,
         index_oid INTEGER,
-        relkind CHAR
+        relkind CHAR,
+		reltoastrelid INTEGER,
+		n_mod_since_analyze BIGINT,
+		n_ins_since_vacuum BIGINT,
+		last_vacuum TIMESTAMPTZ,
+		last_autovacuum TIMESTAMPTZ,
+		last_analyze TIMESTAMPTZ,
+		last_autoanalyze TIMESTAMPTZ
     );
 
+	CREATE TEMPORARY TABLE ci_indexes_warnings
+	(
+		table_oid INTEGER,
+		index_oid INTEGER,
+		priority INTEGER,
+		warning VARCHAR
+	);
+
+
+
+
     -- Build SQL for Tables & Materialized Views
-    sql_tables_views := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, is_unique, is_primary, table_oid, index_oid, relkind)
+    sql_to_execute := '
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, 
+		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
+		n_mod_since_analyze, n_ins_since_vacuum, last_vacuum, last_autovacuum, last_analyze, last_autoanalyze)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -66,7 +85,9 @@ BEGIN
         CAST(NULL AS BOOLEAN) AS is_primary,
         c_tbl.oid AS table_oid,
         CAST(NULL AS INTEGER) AS index_oid,
-        c_tbl.relkind
+		c_tbl.relkind,
+        c_tbl.reltoastrelid,
+		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze
     FROM
         pg_catalog.pg_class c_tbl
     JOIN pg_catalog.pg_namespace nm ON
@@ -75,15 +96,19 @@ BEGIN
         pg_catalog.pg_stat_user_tables stat ON
         stat.relid = c_tbl.oid
     WHERE
-        nm.nspname IN (''duplicate'', ''public'')
+        (nm.nspname = ' || COALESCE(quote_literal(v_schema_name), 'nm.nspname') || ')
+        AND (c_tbl.relname = ' || COALESCE(quote_literal(v_table_name), 'c_tbl.relname') || ')
         AND c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
 
+    EXECUTE sql_to_execute;
+
+
     -- Build SQL for TOAST Tables
-    sql_toast_tables := '
+    sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, is_unique, is_primary, table_oid, index_oid, relkind)
     SELECT
-        nm.nspname AS schema_name,
-        c_tbl.relname AS table_name,
+        c_tbl.schema_name AS schema_name,
+        c_tbl.table_name AS table_name,
         c_toast_tbl.relname AS index_name,
         ''toast'' AS index_type,
         NULL AS index_definition,
@@ -92,44 +117,41 @@ BEGIN
         NULL AS estimated_tuples_as_of,
         NULL AS is_unique,
         NULL AS is_primary,
-        c_tbl.oid AS table_oid,
+        c_tbl.table_oid AS table_oid,
         c_toast_tbl.oid AS index_oid,
         c_toast_tbl.relkind AS relkind
     FROM
-        pg_catalog.pg_class c_tbl
-    JOIN pg_catalog.pg_namespace nm ON
-        c_tbl.relnamespace = nm.oid
+        ci_indexes c_tbl
     JOIN 
         pg_catalog.pg_class c_toast_tbl
         ON c_tbl.reltoastrelid = c_toast_tbl.oid
-    WHERE
-        nm.nspname IN (''duplicate'', ''public'')
-        AND c_tbl.relkind NOT IN (''i'', ''I'');';
+	WHERE c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
+
+    EXECUTE sql_to_execute;
+
 
     -- Build SQL for Indexes
-    sql_indexes := '
+    sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, is_unique, is_primary, table_oid, index_oid, relkind)
     SELECT
-        nm.nspname AS schema_name,
-        c_tbl.relname AS table_name,
+        c_tbl.schema_name AS schema_name,
+        c_tbl.table_name AS table_name,
         c_ix.relname AS index_name,
         am.amname AS index_type,
         pg_get_indexdef(c_ix.oid) AS index_definition,
         pg_relation_size(i.indexrelid) / 1024.0 AS size_kb,
-        COALESCE(c_ix.reltuples, c_tbl.reltuples) AS estimated_tuples_from_pg_class_reltuples,
+        COALESCE(c_ix.reltuples, c_tbl.estimated_tuples_from_pg_class_reltuples) AS estimated_tuples_from_pg_class_reltuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
         indisunique AS is_unique,
         indisprimary AS is_primary,
-        c_tbl.oid AS table_oid,
+        c_tbl.table_oid AS table_oid,
         c_ix.oid AS index_oid,
         c_ix.relkind
     FROM
-        pg_catalog.pg_class c_tbl
-    JOIN pg_catalog.pg_namespace nm ON
-        c_tbl.relnamespace = nm.oid
+        ci_indexes c_tbl
     JOIN 
         pg_catalog.pg_index i ON
-        c_tbl.oid = i.indrelid
+        c_tbl.table_oid = i.indrelid
     JOIN
         pg_catalog.pg_class c_ix ON
         i.indexrelid = c_ix.oid
@@ -142,24 +164,34 @@ BEGIN
     LEFT JOIN
         pg_catalog.pg_stat_user_tables stat ON
         stat.relid = i.indrelid
-    WHERE
-        nm.nspname IN (''duplicate'', ''public'')
-        AND c_tbl.relkind NOT IN (''i'', ''I'');';
+	WHERE c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
 
-    -- Execute the dynamically built SQL statements
-    EXECUTE sql_tables_views;
-    EXECUTE sql_toast_tables;
-    EXECUTE sql_indexes;
+    EXECUTE sql_to_execute;
+
+
+	-- Process warnings starting with priority 1, outdated stats
+	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning)
+	SELECT i.table_oid, i.index_oid, 1, 'Outdated Statistics ' || i.estimated_tuples_from_pg_class_reltuples::varchar || ' est rows - ' || i.n_ins_since_vacuum::varchar
+		|| ' ins_since_last_vacuum ' || i.n_mod_since_analyze::varchar || ' mod_since_analyze'
+	FROM ci_indexes i
+	WHERE (i.estimated_tuples_from_pg_class_reltuples + i.n_ins_since_vacuum + i.n_mod_since_analyze) > 1000
+		AND (ABS(1 - (i.estimated_tuples_from_pg_class_reltuples::numeric / (i.estimated_tuples_from_pg_class_reltuples::numeric + i.n_ins_since_vacuum::numeric + 1))) > 0.1
+       			OR ABS(1 - (i.estimated_tuples_from_pg_class_reltuples::numeric / (i.estimated_tuples_from_pg_class_reltuples::numeric + i.n_mod_since_analyze::numeric + 1))) > 0.1);
 
     -- Return the result set
     RETURN QUERY
     SELECT ci.schema_name, ci.table_name, ci.index_name, ci.index_type,
            ci.index_definition, ci.size_kb, ci.estimated_tuples_from_pg_class_reltuples,
            ci.estimated_tuples_as_of, ci.is_unique, ci.is_primary,
-           ci.table_oid, ci.index_oid
+           ci.table_oid, ci.index_oid,
+			w.priority, w.warning
     FROM ci_indexes ci
+	LEFT OUTER JOIN ci_indexes_warnings w 
+		ON ci.table_oid = w.table_oid
+		AND (ci.index_oid = w.index_oid OR (ci.index_oid IS NULL AND w.index_oid IS NULL))
     ORDER BY 1, 2, 3;
 
     DROP TABLE ci_indexes;
+    DROP TABLE ci_indexes_warnings;
 END;
 $$;

@@ -116,6 +116,47 @@ select REPEAT('Malkovich ', 10000), REPEAT('Malkovich ', 10000)
 from generate_series(1,10000);   
       
 
+
+
+drop table if exists public.bad_estimates cascade;
+
+
+CREATE TABLE public.bad_estimates (
+    user_id SERIAL PRIMARY KEY, /* Creates a row in pg_class */
+    display_name VARCHAR(100) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL, /* Creates a row in pg_class */
+    reputation INTEGER DEFAULT 0,
+    creation_date TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    last_access_date TIMESTAMPTZ,
+    location VARCHAR(255),
+    about_me TEXT,
+    about_me_tsvector TSVECTOR,
+    website_url VARCHAR(255),
+    profile_image_url VARCHAR(255),
+    is_active BOOLEAN DEFAULT true,
+    "space space" VARCHAR,
+    "1" INTEGER,
+    " " VARCHAR,
+    "." VARCHAR,
+    "," VARCHAR,
+    """" VARCHAR,
+    "ヅ" VARCHAR
+);
+
+INSERT INTO public.bad_estimates
+(display_name, email, reputation, creation_date, last_access_date, "location", about_me, about_me_tsvector, 
+website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
+select 'John Malkovich', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2024-08-20', '2024-08-20', 'Las Vegas, NV', 'A fictional character', 'A fictional character',
+	'https://SmartPostgres.com', null, 'space space', '1', ' ', '.', ',', '"', 'ヅ'
+from generate_series(1,10000);
+
+INSERT INTO public.bad_estimates
+(display_name, email, reputation, creation_date, last_access_date, "location", about_me, about_me_tsvector, 
+website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
+select 'Jorriss', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2024-08-20', '2024-08-20', 'Orlando, FL', 'A non-fictional character', 'A non-fictional character',
+	'https://www.postgresql.org', null, 'space space', '1', ' ', '.', ',', '"', 'ヅ'
+from generate_series(1,10);
+
    
    
 
