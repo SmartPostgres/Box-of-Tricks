@@ -1,6 +1,7 @@
 drop table if exists public.users cascade;
 
 
+
 CREATE TABLE public.users (
     user_id SERIAL PRIMARY KEY, /* Creates a row in pg_class */
     display_name VARCHAR(100) NOT NULL,
@@ -63,7 +64,6 @@ create index "ヅ" on public.users("ヅ");
 
 /* Adding more rows after the indexes have been created
  * so we can test for accurate row counts in filtered index stats. */
- */
 INSERT INTO public.users
 (display_name, email, reputation, creation_date, last_access_date, "location", about_me, about_me_tsvector, 
 website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
@@ -181,11 +181,30 @@ select 'Jorriss', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2
 from generate_series(1,10);
 
    
+alter table public.bad_estimates set (autovacuum_enabled = false);
+
+INSERT INTO public.bad_estimates
+(display_name, email, reputation, creation_date, last_access_date, "location", about_me, about_me_tsvector, 
+website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
+select 'John Malkovich', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2024-08-20', '2024-08-20', 'Las Vegas, NV', 'A fictional character', 'A fictional character',
+	'https://SmartPostgres.com', null, 'space space', '1', ' ', '.', ',', '"', 'ヅ'
+from generate_series(1,100000);
+
+INSERT INTO public.bad_estimates
+(display_name, email, reputation, creation_date, last_access_date, "location", about_me, about_me_tsvector, 
+website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
+select 'Jorriss', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2024-08-20', '2024-08-20', 'Orlando, FL', 'A non-fictional character', 'A non-fictional character',
+	'https://www.postgresql.org', null, 'space space', '1', ' ', '.', ',', '"', 'ヅ'
+from generate_series(1,1000);
+
+
 
 
 
 
 -- Step 1: Create the parent table
+drop table if exists public.users_partitioned cascade;
+
 CREATE TABLE public.users_partitioned (
     id SERIAL,
     displayname VARCHAR(100),
@@ -246,6 +265,8 @@ END $$;
 
 
 -- Step 1: Create the parent table
+drop table if exists public.users_partitioned_noindexes cascade;
+
 CREATE TABLE public.users_partitioned_noindexes (
     id SERIAL,
     displayname VARCHAR(100),

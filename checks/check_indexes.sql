@@ -3,7 +3,8 @@
 
 CREATE OR REPLACE FUNCTION check_indexes (
     v_schema_name VARCHAR,
-    v_table_name VARCHAR
+    v_table_name VARCHAR,
+    v_warning_format VARCHAR default 'rows'
 )
 RETURNS TABLE (
     schema_name VARCHAR,
@@ -19,7 +20,8 @@ RETURNS TABLE (
     table_oid INTEGER,
     index_oid INTEGER,
     priority INTEGER, 
-    warning VARCHAR,
+    warning_summary VARCHAR,
+    warning_details VARCHAR,
     url VARCHAR
 )
 LANGUAGE plpgsql
@@ -56,7 +58,8 @@ BEGIN
 		table_oid INTEGER,
 		index_oid INTEGER,
 		priority INTEGER,
-		warning VARCHAR,
+		warning_summary VARCHAR,
+		warning_details VARCHAR,
 		url VARCHAR
 	);
 
@@ -205,14 +208,25 @@ BEGIN
 
 
 
-	-- Process warnings starting with priority 1, outdated stats
-	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning)
-	SELECT i.table_oid, i.index_oid, 1, 'Outdated Statistics ' || i.estimated_tuples_from_pg_class_reltuples::varchar || ' est rows - ' || i.n_ins_since_vacuum::varchar
-		|| ' ins_since_last_vacuum ' || i.n_mod_since_analyze::varchar || ' mod_since_analyze'
+	-- Process warnings starting with priority 100, Outdated Statistics.
+
+	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
+	SELECT i.table_oid, i.index_oid, 100, 
+		'Outdated Statistics' AS warning_summary,
+		'Query plans may have invalid estimates. ' 
+			|| i.estimated_tuples_from_pg_class_reltuples::varchar || ' estimated tuples from pg_class.reltuples. ' 
+			|| i.n_ins_since_vacuum::varchar || ' tuples ins_since_last_vacuum. ' 
+			|| ' last_vacuum on ' || COALESCE(i.last_vacuum::date::varchar, '(never)')
+			|| '. last_autovacuum on ' || COALESCE(i.last_autovacuum::date::varchar, '(never)') || '. '
+			|| i.n_mod_since_analyze::varchar || ' mod_since_analyze.' 
+			|| ' last_analyze on ' || COALESCE(i.last_analyze::date::varchar, '(never)')
+			|| '. last_autoanalyze on ' || COALESCE(i.last_autoanalyze::date::varchar, '(never)') AS warning_details,
+	'https://smartpostgres.com/problems/outdated_statistics' AS url
 	FROM ci_indexes i
 	WHERE (i.estimated_tuples_from_pg_class_reltuples + i.n_ins_since_vacuum + i.n_mod_since_analyze) > 1000
 		AND (ABS(1 - (i.estimated_tuples_from_pg_class_reltuples::numeric / (i.estimated_tuples_from_pg_class_reltuples::numeric + i.n_ins_since_vacuum::numeric + 1))) > 0.1
        			OR ABS(1 - (i.estimated_tuples_from_pg_class_reltuples::numeric / (i.estimated_tuples_from_pg_class_reltuples::numeric + i.n_mod_since_analyze::numeric + 1))) > 0.1);
+
 
     -- Return the result set
     RETURN QUERY
@@ -220,12 +234,12 @@ BEGIN
            ci.index_definition, ci.size_kb, ci.estimated_tuples_from_pg_class_reltuples,
            ci.estimated_tuples_as_of, ci.is_unique, ci.is_primary,
            ci.table_oid, ci.index_oid,
-			w.priority, w.warning, w.url
+			w.priority, w.warning_summary, w.warning_details, w.url
     FROM ci_indexes ci
 	LEFT OUTER JOIN ci_indexes_warnings w 
 		ON ci.table_oid = w.table_oid
 		AND (ci.index_oid = w.index_oid OR (ci.index_oid IS NULL AND w.index_oid IS NULL))
-    ORDER BY 1, 2, 3;
+    ORDER BY 1, 2, 3, w.priority, w.warning_summary;
 
     DROP TABLE ci_indexes;
     DROP TABLE ci_indexes_warnings;
