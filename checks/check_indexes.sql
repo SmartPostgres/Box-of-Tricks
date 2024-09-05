@@ -1,3 +1,6 @@
+--drop function check_indexes;
+
+
 CREATE OR REPLACE FUNCTION check_indexes (
     v_schema_name VARCHAR,
     v_table_name VARCHAR
@@ -15,7 +18,9 @@ RETURNS TABLE (
     is_primary BOOLEAN,
     table_oid INTEGER,
     index_oid INTEGER,
-    priority INTEGER, warning VARCHAR
+    priority INTEGER, 
+    warning VARCHAR,
+    url VARCHAR
 )
 LANGUAGE plpgsql
 AS $$
@@ -51,7 +56,8 @@ BEGIN
 		table_oid INTEGER,
 		index_oid INTEGER,
 		priority INTEGER,
-		warning VARCHAR
+		warning VARCHAR,
+		url VARCHAR
 	);
 
 
@@ -139,7 +145,7 @@ BEGIN
         c_ix.relname AS index_name,
         am.amname AS index_type,
         pg_get_indexdef(c_ix.oid) AS index_definition,
-        pg_relation_size(i.indexrelid) / 1024.0 AS size_kb,
+        pg_relation_size(c_ix.oid) / 1024.0 AS size_kb,
         COALESCE(c_ix.reltuples, c_tbl.estimated_tuples_from_pg_class_reltuples) AS estimated_tuples_from_pg_class_reltuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
         indisunique AS is_unique,
@@ -168,6 +174,36 @@ BEGIN
 
     EXECUTE sql_to_execute;
 
+	-- Update partitioned index data to include all child indexes
+	UPDATE ci_indexes tbl
+		SET size_kb = child.size_kb,
+			estimated_tuples_from_pg_class_reltuples = child.reltuples
+	FROM (SELECT inh.inhparent, SUM(pg_relation_size(child.oid) / 1024.0) AS size_kb,
+			SUM(COALESCE(child.reltuples, 0)) AS reltuples
+		FROM pg_catalog.pg_inherits inh 
+		JOIN pg_catalog.pg_class child ON inh.inhrelid = child.oid
+		GROUP BY inh.inhparent
+		) child
+	WHERE tbl.relkind IN ('I')
+	  AND tbl.size_kb = 0 AND tbl.estimated_tuples_from_pg_class_reltuples = 0
+	  AND tbl.index_oid = child.inhparent;
+
+	-- Update partitioned table data to include all child tables
+	UPDATE ci_indexes tbl
+		SET size_kb = child.size_kb
+	FROM (SELECT inh.inhparent, SUM(pg_relation_size(child.oid) / 1024.0) AS size_kb,
+			SUM(COALESCE(child.reltuples, 0)) AS reltuples
+		FROM pg_catalog.pg_inherits inh 
+		JOIN pg_catalog.pg_class child ON inh.inhrelid = child.oid
+		GROUP BY inh.inhparent
+		) child
+	WHERE tbl.relkind IN ('p')
+	  AND tbl.size_kb = 0
+	  AND tbl.table_oid = child.inhparent;
+
+
+
+
 
 	-- Process warnings starting with priority 1, outdated stats
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning)
@@ -184,7 +220,7 @@ BEGIN
            ci.index_definition, ci.size_kb, ci.estimated_tuples_from_pg_class_reltuples,
            ci.estimated_tuples_as_of, ci.is_unique, ci.is_primary,
            ci.table_oid, ci.index_oid,
-			w.priority, w.warning
+			w.priority, w.warning, w.url
     FROM ci_indexes ci
 	LEFT OUTER JOIN ci_indexes_warnings w 
 		ON ci.table_oid = w.table_oid

@@ -61,6 +61,16 @@ create index "," on public.users(",");
 create index """" on public.users("""");
 create index "ヅ" on public.users("ヅ");
 
+/* Adding more rows after the indexes have been created
+ * so we can test for accurate row counts in filtered index stats. */
+ */
+INSERT INTO public.users
+(display_name, email, reputation, creation_date, last_access_date, "location", about_me, about_me_tsvector, 
+website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
+select 'John Malkovich', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2024-08-20', '2024-08-20', 'Las Vegas, NV', 'A fictional character', 'A fictional character',
+	'https://SmartPostgres.com', null, 'space space', '1', ' ', '.', ',', '"', 'ヅ'
+from generate_series(1,10000);
+
 
 drop view if exists public.vw_users;
 
@@ -90,6 +100,19 @@ FROM
 
    
 refresh materialized view public.vw_users_hours_since_last_access;
+
+
+/* Insert more rows so that the materialized view is out of date: */
+INSERT INTO public.users
+(display_name, email, reputation, creation_date, last_access_date, "location", about_me, about_me_tsvector, 
+website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
+select 'John Malkovich', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2024-08-20', '2024-08-20', 'Las Vegas, NV', 'A fictional character', 'A fictional character',
+	'https://SmartPostgres.com', null, 'space space', '1', ' ', '.', ',', '"', 'ヅ'
+from generate_series(1,10000);
+
+
+
+
 
 drop sequence if exists public.user_sequence;
 
@@ -158,7 +181,127 @@ select 'Jorriss', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2
 from generate_series(1,10);
 
    
-   
+
+
+
+
+-- Step 1: Create the parent table
+CREATE TABLE public.users_partitioned (
+    id SERIAL,
+    displayname VARCHAR(100),
+    location VARCHAR(100),
+    reputation INTEGER,
+    creationdate DATE,
+    lastaccessdate DATE, 
+    PRIMARY KEY (id, creationdate)  -- Include creationdate in the primary key
+
+) PARTITION BY RANGE (creationdate);
+
+-- Step 2: Create partitions by year
+CREATE TABLE public.users_partitioned_2018 PARTITION OF users_partitioned
+    FOR VALUES FROM ('2018-01-01') TO ('2019-01-01');
+
+CREATE TABLE public.users_partitioned_2019 PARTITION OF users_partitioned
+    FOR VALUES FROM ('2019-01-01') TO ('2020-01-01');
+
+CREATE TABLE public.users_partitioned_2020 PARTITION OF users_partitioned
+    FOR VALUES FROM ('2020-01-01') TO ('2021-01-01');
+
+CREATE TABLE public.users_partitioned_2021 PARTITION OF users_partitioned
+    FOR VALUES FROM ('2021-01-01') TO ('2022-01-01');
+
+CREATE TABLE public.users_partitioned_2022 PARTITION OF users_partitioned
+    FOR VALUES FROM ('2022-01-01') TO ('2023-01-01');
+
+CREATE TABLE public.users_partitioned_2023 PARTITION OF users_partitioned
+    FOR VALUES FROM ('2023-01-01') TO ('2024-01-01');
+
+-- Step 3: Add indexes on DisplayName and Location
+CREATE INDEX idx_users_displayname ON public.users_partitioned USING btree (displayname);
+CREATE INDEX idx_users_location ON public.users_partitioned USING btree (location);
+
+-- Step 4: Insert random data
+DO $$
+DECLARE
+    i INT;
+    creation_date DATE;
+BEGIN
+    FOR i IN 1..100000 LOOP
+        -- Generate a random creation date between 2019 and 2022
+        creation_date := DATE '2019-01-01' + (random() * (DATE '2023-01-01' - DATE '2019-01-01'))::INT;
+        
+        INSERT INTO public.users_partitioned (displayname, location, reputation, creationdate, lastaccessdate)
+        VALUES (
+            'User' || i,  -- Random display name
+            'Location' || (random() * 100)::INT,  -- Random location
+            (random() * 10000)::INT,  -- Random reputation
+            creation_date,
+            creation_date + (random() * 365)::INT  -- Random last access date within a year
+        );
+    END LOOP;
+END $$;
+
+
+
+
+
+-- Step 1: Create the parent table
+CREATE TABLE public.users_partitioned_noindexes (
+    id SERIAL,
+    displayname VARCHAR(100),
+    location VARCHAR(100),
+    reputation INTEGER,
+    creationdate DATE,
+    lastaccessdate DATE
+) PARTITION BY RANGE (creationdate);
+
+-- Step 2: Create partitions by year
+CREATE TABLE public.users_partitioned_noindexes_2018 PARTITION OF users_partitioned_noindexes
+    FOR VALUES FROM ('2018-01-01') TO ('2019-01-01');
+
+CREATE TABLE public.users_partitioned_noindexes_2019 PARTITION OF users_partitioned_noindexes
+    FOR VALUES FROM ('2019-01-01') TO ('2020-01-01');
+
+CREATE TABLE public.users_partitioned_noindexes_2020 PARTITION OF users_partitioned_noindexes
+    FOR VALUES FROM ('2020-01-01') TO ('2021-01-01');
+
+CREATE TABLE public.users_partitioned_noindexes_2021 PARTITION OF users_partitioned_noindexes
+    FOR VALUES FROM ('2021-01-01') TO ('2022-01-01');
+
+CREATE TABLE public.users_partitioned_noindexes_2022 PARTITION OF users_partitioned_noindexes
+    FOR VALUES FROM ('2022-01-01') TO ('2023-01-01');
+
+CREATE TABLE public.users_partitioned_noindexes_2023 PARTITION OF users_partitioned_noindexes
+    FOR VALUES FROM ('2023-01-01') TO ('2024-01-01');
+
+-- Step 3: Collect underpants
+
+-- Step 4: Insert random data
+DO $$
+DECLARE
+    i INT;
+    creation_date DATE;
+BEGIN
+    FOR i IN 1..100000 LOOP
+        -- Generate a random creation date between 2019 and 2022
+        creation_date := DATE '2019-01-01' + (random() * (DATE '2023-01-01' - DATE '2019-01-01'))::INT;
+        
+        INSERT INTO public.users_partitioned_noindexes (displayname, location, reputation, creationdate, lastaccessdate)
+        VALUES (
+            'User' || i,  -- Random display name
+            'Location' || (random() * 100)::INT,  -- Random location
+            (random() * 10000)::INT,  -- Random reputation
+            creation_date,
+            creation_date + (random() * 365)::INT  -- Random last access date within a year
+        );
+    END LOOP;
+END $$;
+
+
+
+
+
+
 
 drop schema if exists duplicate CASCADE;
 
