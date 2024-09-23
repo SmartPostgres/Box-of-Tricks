@@ -177,32 +177,21 @@ BEGIN
 
     EXECUTE sql_to_execute;
 
-	-- Update partitioned index data to include all child indexes
+	-- Update partitioned index data to include all child indexes and tables
 	UPDATE ci_indexes tbl
 		SET size_kb = child.size_kb,
-			estimated_tuples_from_pg_class_reltuples = child.reltuples
+			estimated_tuples_from_pg_class_reltuples = CASE WHEN tbl.estimated_tuples_from_pg_class_reltuples <= 0
+			                                                THEN child.reltuples
+			                                                ELSE tbl.estimated_tuples_from_pg_class_reltuples END
 	FROM (SELECT inh.inhparent, SUM(pg_relation_size(child.oid) / 1024.0) AS size_kb,
 			SUM(COALESCE(child.reltuples, 0)) AS reltuples
 		FROM pg_catalog.pg_inherits inh 
 		JOIN pg_catalog.pg_class child ON inh.inhrelid = child.oid
 		GROUP BY inh.inhparent
 		) child
-	WHERE tbl.relkind IN ('I')
-	  AND tbl.size_kb = 0 AND tbl.estimated_tuples_from_pg_class_reltuples = 0
-	  AND tbl.index_oid = child.inhparent;
-
-	-- Update partitioned table data to include all child tables
-	UPDATE ci_indexes tbl
-		SET size_kb = child.size_kb
-	FROM (SELECT inh.inhparent, SUM(pg_relation_size(child.oid) / 1024.0) AS size_kb,
-			SUM(COALESCE(child.reltuples, 0)) AS reltuples
-		FROM pg_catalog.pg_inherits inh 
-		JOIN pg_catalog.pg_class child ON inh.inhrelid = child.oid
-		GROUP BY inh.inhparent
-		) child
-	WHERE tbl.relkind IN ('p')
+	WHERE tbl.relkind IN ('p', 'I')
 	  AND tbl.size_kb = 0
-	  AND tbl.table_oid = child.inhparent;
+	  AND COALESCE(tbl.index_oid, tbl.table_oid) = child.inhparent;
 
 
 
