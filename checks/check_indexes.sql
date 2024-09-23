@@ -223,9 +223,7 @@ BEGIN
 			|| '. last_autoanalyze on ' || COALESCE(i.last_autoanalyze::date::varchar, '(never)') AS warning_details,
 	'https://smartpostgres.com/problems/outdated_statistics' AS url
 	FROM ci_indexes i
-	WHERE (i.estimated_tuples_from_pg_class_reltuples + i.n_ins_since_vacuum + i.n_mod_since_analyze) > 1000
-		AND (ABS(1 - (i.estimated_tuples_from_pg_class_reltuples::numeric / (i.estimated_tuples_from_pg_class_reltuples::numeric + i.n_ins_since_vacuum::numeric + 1))) > 0.1
-       			OR ABS(1 - (i.estimated_tuples_from_pg_class_reltuples::numeric / (i.estimated_tuples_from_pg_class_reltuples::numeric + i.n_mod_since_analyze::numeric + 1))) > 0.1);
+    WHERE ABS(i.estimated_tuples_from_pg_class_reltuples::numeric) * 0.1 < GREATEST(i.n_ins_since_vacuum, i.n_mod_since_analyze);
 
 
     -- Return the result set
