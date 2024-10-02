@@ -1,13 +1,15 @@
 /* Prep work ahead of the class: */
 create index posts_owneruserid on public.posts using btree(owneruserid);
 create index posts_score_owneruserid on public.posts using btree(score, owneruserid);
-delete users where id < 0; /* removing tag-based users, making the data easier to understand */
+delete from public.users where id < 0; /* removing tag-based users, making the data easier to understand */
+drop index users_reputation;
+drop index users_location_reputation;
+drop index reputation;
+
 drop index users_creationdate;
 drop index users_displayname;
 drop index users_location_displayname;
-drop index users_reputation;
 drop index users_location;
-drop index users_location_reputation;
 
 
 /* Meet the Stack Overflow users table: */
@@ -31,7 +33,8 @@ select * from check_indexes('public', 'users');
 select * from users where location = 'Las Vegas, NV, USA';
 
 
-/* Run that a few times, note ordering */
+/* Run that a few times, note ordering.
+ * Order isn't guaranteed in Postgres unless you ask for it. */
 
 
 /* Find the highest ranking users: */
@@ -71,6 +74,16 @@ select *
  */
 
 
+/* Takeaways:
+ * Focus on the operators:
+ * 		Taking the most time
+ * 		Going parallel across multiple cores (enough cores?)
+ * 		Filtering the most (reading unnecessary rows)
+ * 		Not yet: estimation problems
+ */
+
+
+
 /* When you see "ordinary table", it's just a heap of rows
  * stored in random order.
  * 
@@ -105,8 +118,6 @@ select *
  */
 create index users_location on public.users (location); 
 
-/* Build another PDF with just Location, CTID for first visualization
- * Don't visualize it yet with the PDF because the PDF uses the Reputation column */
 /* Look at the table & index sizes now: */
 select * from check_indexes('public', 'users');
 
@@ -145,8 +156,9 @@ select *
  */
 select location, reputation, ctid
 	from users
+	where location <> ''
 	order by location, reputation 
-	limit 100;
+	limit 1000;
 
 
 /* ctid = Current Tuple ID
@@ -164,20 +176,12 @@ select location, reputation, ctid
  * another class.
  */
 
-/* Takeaways:
- * Focus on the operators:
- * 		Taking the most time
- * 		Going parallel across multiple cores (enough cores?)
- * 		Filtering the most (reading unnecessary rows)
- * 		Not yet: estimation problems
- */
 
 
 
 select * from check_indexes('public', 'users');
 
-/* Introducing check_indexes to them for the first time
- * Index on location_reputation is physically larger than the one on just location
+/* Index on location_reputation is physically larger than the one on just location
  * Reputation column has to be kept in sync with every update
  * Ideally, don't want to index "hot" columns because it causes more IO
  * Strike a balance between making selects faster vs making inserts/updates/deletes faster
@@ -186,6 +190,8 @@ select * from check_indexes('public', 'users');
 
 drop index users_location;
 
+
+/* The query uses the wider index on location_reputation: */
 explain (analyze, buffers, costs, verbose, format json)
 select * 
 	from users 
@@ -194,12 +200,70 @@ select *
 	limit 100;
 
 
+/* Does index column order matter? Let's find out: */
+create index users_reputation_location on public.users(reputation, location);
+drop index users_location_reputation;
 
-/* Uses index on location_reputation
- * This way I only have 1 copy lying around instead of 2
- * You probably have this problem in your own environment - to find it:
+
+/* Rerun our query: */
+explain (analyze, buffers, costs, verbose, format json)
+select * 
+	from users 
+	where location = 'Las Vegas, NV, USA' 
+	order by reputation desc 
+	limit 100;
+
+/* It's not obvious by looking at the explain plan,
+ * but Postgres had to read way more rows than it needed
+ * and it filtered a bunch of them out.
+ * 
+ * It read from the top ranking reputation down,
+ * backwards, and the data it's looking at in the
+ * indexes looks like this: */
+
+select reputation, location, ctid
+from users
+order by reputation desc
+limit 1000;
+
+
+/* For each row, Postgres has to look at the location
+ * column and see whether or not it matches Vegas.
+ * 
+ * That's less efficient than the location_reputation
+ * index, where we could:
+ * 
+ * 1. Seek to Las Vegas, to the highest row
+ * 2. Read backwards, from highest rep to lowest
+ * 
+ * In that scenario we only read Vegas people,
+ * whereas now, Vegas people are scattered all through
+ * the index.
+ * 
+ * Postgres knows this is gonna be expensive:
+ * note the cost on the plan.
+ * 
+ * Let's add the other index back in and see which one
+ * Postgres chooses to use when it has both:
  */
-select * from check_indexes('public', 'null');
+
+create index users_location_reputation
+	on users(location, reputation);
+
+/* Rerun our query: */
+explain (analyze, buffers, costs, verbose, format json)
+select * 
+	from users 
+	where location = 'Las Vegas, NV, USA' 
+	order by reputation desc 
+	limit 100;
+
+
+/* Postgres uses the index on location_reputation because
+ * the estimated cost is cheaper. Note that it also runs
+ * way faster.
+ */
+select * from check_indexes('public', 'users');
 
 
 
