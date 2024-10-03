@@ -15,19 +15,6 @@ drop index users_location;
 /* Meet the Stack Overflow users table: */
 select * from public.users limit 100;
 
-select ctid, xmin, xmax, * 
-from public.users 
-order by ctid
-limit 100;
-
-
-/* Review sizes: */
-select * from check_indexes('public', 'users');
-
-
-/* The way it's stored on disk, shown in the first page of this PDF:
- * https://SmartPostgres.com/go/free
- */
 
 /* Let's say I'm looking for the people near me: */
 select * from users where location = 'Las Vegas, NV, USA';
@@ -84,18 +71,6 @@ select *
 
 
 
-/* When you see "ordinary table", it's just a heap of rows
- * stored in random order.
- * 
- * If you query check_indexes and you don't see any indexes
- * that match the sort order you're looking for,
- * your queries are gonna be slow because we have to scan
- * the entire heap of data looking for stuff:
- * */
-select * from check_indexes('public', 'users');
-
-
-
 /* How to read a plan, intro */
 
 
@@ -114,15 +89,11 @@ select *
  * to pre-sort the data in the way we need it.
  * 
  * Let's create a copy of the table sorted by
- * location so we can quickly find the Vegas folks:
+ * location so we can quickly find the Vegas folks,
+ * and read them out in reputation order:
  */
-create index users_location on public.users (location); 
+create index users_location_reputation on public.users (location, reputation); 
 
-/* Look at the table & index sizes now: */
-select * from check_indexes('public', 'users');
-
-
-/* The index on users_location is literally a copy of the table. */
 
 
 /* Review the new plan after index */
@@ -133,27 +104,10 @@ select *
 	order by reputation desc 
 	limit 100;
 
+/* Note backward index scan.*/
 
 
-/* We're still sorting the data.
- * We could remove that work too if we pre-sort
- * the data by location, then by reputation: */
-create index users_location_reputation 
-	on public.users (location, reputation);
-
-
-
-explain (analyze, buffers, costs, verbose, format json)
-select * 
-	from users 
-	where location = 'Las Vegas, NV, USA' 
-	order by reputation desc 
-	limit 100;
-
-/* Note backward index scan
- * 
- * So what's actually inside that index?
- */
+/* So what's actually inside that index? Let's visualize it. */
 select location, reputation, ctid
 	from users
 	where location <> ''
@@ -179,16 +133,39 @@ select location, reputation, ctid
 
 
 
+/* When you see "ordinary table", it's just a heap of rows
+ * stored in random order.
+ * 
+ * If you query check_indexes and you don't see any indexes
+ * that match the sort order you're looking for,
+ * your queries are gonna be slow because we have to scan
+ * the entire heap of data looking for stuff:
+ * */
+
+
 select * from check_indexes('public', 'users');
 
-/* Index on location_reputation is physically larger than the one on just location
- * Reputation column has to be kept in sync with every update
+/* Reputation column has to be kept in sync with every update
  * Ideally, don't want to index "hot" columns because it causes more IO
  * Strike a balance between making selects faster vs making inserts/updates/deletes faster
  * Here, we can eliminate users_location because any query that needed just location can use location_reputation
  */
 
-drop index users_location;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 /* The query uses the wider index on location_reputation: */
@@ -549,3 +526,23 @@ limit 100;
  * running operators, especially parallel ones,
  * reading & filtering out most of the table.
 */
+
+
+
+
+
+
+
+select ctid, xmin, xmax, * 
+from public.users 
+order by ctid
+limit 100;
+
+
+/* Review sizes: */
+select * from check_indexes('public', 'users');
+
+
+/* The way it's stored on disk, shown in the first page of this PDF:
+ * https://SmartPostgres.com/go/free
+ */
