@@ -138,6 +138,50 @@ BEGIN
 
     EXECUTE sql_to_execute;
 
+    -- Build SQL for the underlying ordinary tables of the partitioned tables
+    sql_to_execute := '
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, 
+		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
+		n_mod_since_analyze, n_ins_since_vacuum, last_vacuum, last_autovacuum, last_analyze, last_autoanalyze)
+    SELECT
+        nm.nspname AS schema_name,
+        c_tbl.relname AS table_name,
+        NULL AS index_name,
+        CASE c_tbl.relkind
+            WHEN ''r'' THEN ''ordinary table''
+            WHEN ''S'' THEN ''sequence''
+            WHEN ''t'' THEN ''TOAST table''
+            WHEN ''v'' THEN ''view'' 
+            WHEN ''m'' THEN ''materialized view'' 
+            WHEN ''c'' THEN ''composite type'' 
+            WHEN ''f'' THEN ''foreign table'' 
+            WHEN ''p'' THEN ''partitioned table''
+            ELSE ''unknown''
+        END AS index_type,
+        NULL AS index_definition,
+        pg_relation_size(c_tbl.oid) / 1024.0 AS size_kb,
+        c_tbl.reltuples AS estimated_tuples_from_pg_class_reltuples,
+        GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
+        CAST(NULL AS BOOLEAN) AS is_unique,
+        CAST(NULL AS BOOLEAN) AS is_primary,
+        c_tbl.oid AS table_oid,
+        CAST(NULL AS INTEGER) AS index_oid,
+		c_tbl.relkind,
+        c_tbl.reltoastrelid,
+		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze
+    FROM pg_catalog.pg_inherits inh 
+    JOIN pg_catalog.pg_class c_tbl ON inh.inhrelid = c_tbl.oid
+    JOIN pg_catalog.pg_namespace nm ON
+        c_tbl.relnamespace = nm.oid
+    LEFT JOIN
+        pg_catalog.pg_stat_user_tables stat ON
+        stat.relid = c_tbl.oid
+	WHERE c_tbl.relkind NOT IN (''i'', ''I'', ''t'')
+    AND EXISTS (SELECT 1 FROM ci_indexes WHERE inhparent = table_oid)         --Only add in the inheritents of a table you are looking at already
+    AND NOT EXISTS (SELECT 1 FROM ci_indexes WHERE c_tbl.oid = table_oid);';  --Don't add it in twice if you asked for null and got all tables above
+
+    EXECUTE sql_to_execute;
+
 
     -- Build SQL for Indexes
     sql_to_execute := '
