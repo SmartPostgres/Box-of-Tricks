@@ -184,7 +184,7 @@ BEGIN
 			                                                THEN child.reltuples
 			                                                ELSE tbl.estimated_tuples_from_pg_class_reltuples END
 	FROM (SELECT inh.inhparent, SUM(pg_relation_size(child.oid) / 1024.0) AS size_kb,
-			SUM(COALESCE(child.reltuples, 0)) AS reltuples
+			SUM(GREATEST(COALESCE(child.reltuples, 0), 0)) AS reltuples
 		FROM pg_catalog.pg_inherits inh 
 		JOIN pg_catalog.pg_class child ON inh.inhrelid = child.oid
 		GROUP BY inh.inhparent
