@@ -197,7 +197,7 @@ BEGIN
 			                                                THEN child.dead_tuples
 			                                                ELSE tbl.dead_tuples END
 	FROM (SELECT inh.inhparent, SUM(pg_relation_size(child.oid) / 1024.0) AS size_kb,
-			SUM(COALESCE(child.reltuples, 0)) AS reltuples,
+			SUM(GREATEST(COALESCE(child.reltuples, 0), 0)) AS reltuples
 			SUM(COALESCE(stat.n_dead_tup, 0)) AS dead_tuples
 		FROM pg_catalog.pg_inherits inh 
 		JOIN pg_catalog.pg_class child ON inh.inhrelid = child.oid
