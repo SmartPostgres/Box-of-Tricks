@@ -92,7 +92,7 @@ BEGIN
         END AS index_type,
         NULL AS index_definition,
         pg_relation_size(c_tbl.oid) / 1024.0 AS size_kb,
-        c_tbl.reltuples AS estimated_tuples,
+        GREATEST(c_tbl.reltuples, 0) AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
         stat.n_dead_tup AS dead_tuples,
 		CAST(NULL AS BOOLEAN) AS is_unique,
@@ -146,9 +146,9 @@ BEGIN
 
     -- Build SQL for the underlying ordinary tables of the partitioned tables
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, 
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
 		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		n_mod_since_analyze, n_ins_since_vacuum, last_vacuum, last_autovacuum, last_analyze, last_autoanalyze)
+		n_mod_since_analyze, n_ins_since_vacuum, last_autovacuum, last_analyze, last_autoanalyze)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -166,7 +166,7 @@ BEGIN
         END AS index_type,
         NULL AS index_definition,
         pg_relation_size(c_tbl.oid) / 1024.0 AS size_kb,
-        c_tbl.reltuples AS estimated_tuples_from_pg_class_reltuples,
+        GREATEST(c_tbl.reltuples, 0) AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
         CAST(NULL AS BOOLEAN) AS is_unique,
         CAST(NULL AS BOOLEAN) AS is_primary,
@@ -174,7 +174,7 @@ BEGIN
         CAST(NULL AS INTEGER) AS index_oid,
 		c_tbl.relkind,
         c_tbl.reltoastrelid,
-		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze
+		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze
     FROM pg_catalog.pg_inherits inh 
     JOIN pg_catalog.pg_class c_tbl ON inh.inhrelid = c_tbl.oid
     JOIN pg_catalog.pg_namespace nm ON
@@ -200,7 +200,7 @@ BEGIN
         am.amname AS index_type,
         pg_get_indexdef(c_ix.oid) AS index_definition,
         pg_relation_size(c_ix.oid) / 1024.0 AS size_kb,
-        COALESCE(c_ix.reltuples, c_tbl.estimated_tuples) AS estimated_tuples,
+        GREATEST(COALESCE(c_ix.reltuples, c_tbl.estimated_tuples, 0), 0) AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
         c_tbl.dead_tuples,
 		stat.last_autovacuum,
@@ -241,7 +241,7 @@ BEGIN
 			                                                THEN child.dead_tuples
 			                                                ELSE tbl.dead_tuples END
 	FROM (SELECT inh.inhparent, SUM(pg_relation_size(child.oid) / 1024.0) AS size_kb,
-			SUM(GREATEST(COALESCE(child.reltuples, 0), 0)) AS reltuples
+			SUM(GREATEST(COALESCE(child.reltuples, 0), 0)) AS reltuples,
 			SUM(COALESCE(stat.n_dead_tup, 0)) AS dead_tuples
 		FROM pg_catalog.pg_inherits inh 
 		JOIN pg_catalog.pg_class child ON inh.inhrelid = child.oid
