@@ -1,7 +1,5 @@
 drop table if exists public.users cascade;
 
-
-
 CREATE TABLE public.users (
     user_id SERIAL PRIMARY KEY, /* Creates a row in pg_class */
     display_name VARCHAR(100) NOT NULL,
@@ -324,6 +322,7 @@ END $$;
 
 
 
+
 drop schema if exists duplicate CASCADE;
 
 create schema duplicate;
@@ -430,4 +429,18 @@ select REPEAT('Malkovich ', 10000), REPEAT('Malkovich ', 10000)
 from generate_series(1,10000);   
       
 
-   
+
+
+drop schema if exists bad_names cascade;
+
+create schema bad_names;
+
+CREATE TABLE bad_names."space space " ("space space" SERIAL PRIMARY KEY);
+CREATE TABLE bad_names."1" ("1" SERIAL PRIMARY KEY);
+CREATE TABLE bad_names." " (" " SERIAL PRIMARY KEY);
+CREATE TABLE bad_names."." ("." SERIAL PRIMARY KEY);
+CREATE TABLE bad_names."," ("," SERIAL PRIMARY KEY);
+CREATE TABLE bad_names."""" ("""" SERIAL PRIMARY KEY);
+CREATE TABLE bad_names."ヅ" ("ヅ" SERIAL PRIMARY KEY);
+CREATE TABLE bad_names."'" ("'" SERIAL PRIMARY KEY);
+
