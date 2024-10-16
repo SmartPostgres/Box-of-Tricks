@@ -13,8 +13,11 @@ RETURNS TABLE (
     index_type VARCHAR,
     index_definition VARCHAR,
     size_kb INTEGER,
-    estimated_tuples_from_pg_class_reltuples INTEGER,
+    estimated_tuples INTEGER,
     estimated_tuples_as_of TIMESTAMPTZ,
+    dead_tuples INTEGER,
+    last_autovacuum TIMESTAMPTZ,
+    last_manual_nonfull_vacuum TIMESTAMPTZ,
     is_unique BOOLEAN,
     is_primary BOOLEAN,
     table_oid INTEGER,
@@ -37,8 +40,9 @@ BEGIN
         index_type VARCHAR,
         index_definition VARCHAR,
         size_kb INTEGER,
-        estimated_tuples_from_pg_class_reltuples INTEGER,
+        estimated_tuples INTEGER,
         estimated_tuples_as_of TIMESTAMPTZ,
+		dead_tuples INTEGER,
         is_unique BOOLEAN,
         is_primary BOOLEAN,
         table_oid INTEGER,
@@ -47,8 +51,8 @@ BEGIN
 		reltoastrelid INTEGER,
 		n_mod_since_analyze BIGINT,
 		n_ins_since_vacuum BIGINT,
-		last_vacuum TIMESTAMPTZ,
 		last_autovacuum TIMESTAMPTZ,
+		last_manual_nonfull_vacuum TIMESTAMPTZ,
 		last_analyze TIMESTAMPTZ,
 		last_autoanalyze TIMESTAMPTZ
     );
@@ -68,9 +72,9 @@ BEGIN
 
     -- Build SQL for Tables & Materialized Views
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, 
-		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		n_mod_since_analyze, n_ins_since_vacuum, last_vacuum, last_autovacuum, last_analyze, last_autoanalyze)
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
+		dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
+		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -88,9 +92,10 @@ BEGIN
         END AS index_type,
         NULL AS index_definition,
         pg_relation_size(c_tbl.oid) / 1024.0 AS size_kb,
-        c_tbl.reltuples AS estimated_tuples_from_pg_class_reltuples,
+        c_tbl.reltuples AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
-        CAST(NULL AS BOOLEAN) AS is_unique,
+        stat.n_dead_tup AS dead_tuples,
+		CAST(NULL AS BOOLEAN) AS is_unique,
         CAST(NULL AS BOOLEAN) AS is_primary,
         c_tbl.oid AS table_oid,
         CAST(NULL AS INTEGER) AS index_oid,
@@ -114,7 +119,7 @@ BEGIN
 
     -- Build SQL for TOAST Tables
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, is_unique, is_primary, table_oid, index_oid, relkind)
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind)
     SELECT
         c_tbl.schema_name AS schema_name,
         c_tbl.table_name AS table_name,
@@ -122,8 +127,9 @@ BEGIN
         ''toast'' AS index_type,
         NULL AS index_definition,
         pg_relation_size(c_toast_tbl.oid) / 1024.0 AS size_kb,
-        NULL AS estimated_tuples_from_pg_class_reltuples,
+        NULL AS estimated_tuples,
         NULL AS estimated_tuples_as_of,
+		NULL AS dead_tuples,
         NULL AS is_unique,
         NULL AS is_primary,
         c_tbl.table_oid AS table_oid,
@@ -141,7 +147,8 @@ BEGIN
 
     -- Build SQL for Indexes
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples_from_pg_class_reltuples, estimated_tuples_as_of, is_unique, is_primary, table_oid, index_oid, relkind)
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
+		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind)
     SELECT
         c_tbl.schema_name AS schema_name,
         c_tbl.table_name AS table_name,
@@ -149,8 +156,11 @@ BEGIN
         am.amname AS index_type,
         pg_get_indexdef(c_ix.oid) AS index_definition,
         pg_relation_size(c_ix.oid) / 1024.0 AS size_kb,
-        COALESCE(c_ix.reltuples, c_tbl.estimated_tuples_from_pg_class_reltuples) AS estimated_tuples_from_pg_class_reltuples,
+        COALESCE(c_ix.reltuples, c_tbl.estimated_tuples) AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
+        c_tbl.dead_tuples,
+		stat.last_autovacuum,
+		stat.last_vacuum,
         indisunique AS is_unique,
         indisprimary AS is_primary,
         c_tbl.table_oid AS table_oid,
@@ -180,18 +190,34 @@ BEGIN
 	-- Update partitioned index data to include all child indexes and tables
 	UPDATE ci_indexes tbl
 		SET size_kb = child.size_kb,
-			estimated_tuples_from_pg_class_reltuples = CASE WHEN tbl.estimated_tuples_from_pg_class_reltuples <= 0
+			estimated_tuples = CASE WHEN tbl.estimated_tuples <= 0
 			                                                THEN child.reltuples
-			                                                ELSE tbl.estimated_tuples_from_pg_class_reltuples END
+			                                                ELSE tbl.estimated_tuples END,
+			dead_tuples = CASE WHEN tbl.dead_tuples <= 0
+			                                                THEN child.dead_tuples
+			                                                ELSE tbl.dead_tuples END
 	FROM (SELECT inh.inhparent, SUM(pg_relation_size(child.oid) / 1024.0) AS size_kb,
 			SUM(GREATEST(COALESCE(child.reltuples, 0), 0)) AS reltuples
+			SUM(COALESCE(stat.n_dead_tup, 0)) AS dead_tuples
 		FROM pg_catalog.pg_inherits inh 
 		JOIN pg_catalog.pg_class child ON inh.inhrelid = child.oid
+		LEFT OUTER JOIN pg_catalog.pg_stat_user_tables stat ON inh.inhrelid = stat.relid
 		GROUP BY inh.inhparent
 		) child
 	WHERE tbl.relkind IN ('p', 'I')
 	  AND tbl.size_kb = 0
 	  AND COALESCE(tbl.index_oid, tbl.table_oid) = child.inhparent;
+
+	-- Update partitioned indexes if necessary to match the table's dead_tuples:
+	UPDATE ci_indexes ix
+		SET dead_tuples = COALESCE(tbl_stats.dead_tuples, 0)
+	FROM (SELECT tbl.table_oid, SUM(COALESCE(tbl.dead_tuples, 0)) AS dead_tuples
+		FROM ci_indexes tbl
+		WHERE tbl.relkind = 'p'
+		GROUP BY tbl.table_oid) tbl_stats
+	WHERE ix.relkind = 'I'
+	  AND ix.table_oid = tbl_stats.table_oid
+	  AND ix.dead_tuples <= 0;
 
 
 
@@ -203,23 +229,25 @@ BEGIN
 	SELECT i.table_oid, i.index_oid, 100, 
 		'Outdated Statistics' AS warning_summary,
 		'Query plans may have invalid estimates. ' 
-			|| i.estimated_tuples_from_pg_class_reltuples::varchar || ' estimated tuples from pg_class.reltuples. ' 
+			|| i.estimated_tuples::varchar || ' estimated tuples from pg_class.reltuples. ' 
 			|| i.n_ins_since_vacuum::varchar || ' tuples ins_since_last_vacuum. ' 
-			|| ' last_vacuum on ' || COALESCE(i.last_vacuum::date::varchar, '(never)')
+			|| ' last_manual_nonfull_vacuum on ' || COALESCE(i.last_manual_nonfull_vacuum::date::varchar, '(never)')
 			|| '. last_autovacuum on ' || COALESCE(i.last_autovacuum::date::varchar, '(never)') || '. '
 			|| i.n_mod_since_analyze::varchar || ' mod_since_analyze.' 
 			|| ' last_analyze on ' || COALESCE(i.last_analyze::date::varchar, '(never)')
 			|| '. last_autoanalyze on ' || COALESCE(i.last_autoanalyze::date::varchar, '(never)') AS warning_details,
 	'https://smartpostgres.com/problems/outdated_statistics' AS url
 	FROM ci_indexes i
-    WHERE ABS(i.estimated_tuples_from_pg_class_reltuples::numeric) * 0.1 < GREATEST(i.n_ins_since_vacuum, i.n_mod_since_analyze);
+    WHERE ABS(i.estimated_tuples::numeric) * 0.1 < GREATEST(i.n_ins_since_vacuum, i.n_mod_since_analyze);
 
 
     -- Return the result set
     RETURN QUERY
     SELECT ci.schema_name, ci.table_name, ci.index_name, ci.index_type,
-           ci.index_definition, ci.size_kb, ci.estimated_tuples_from_pg_class_reltuples,
-           ci.estimated_tuples_as_of, ci.is_unique, ci.is_primary,
+           ci.index_definition, ci.size_kb, ci.estimated_tuples,
+           ci.estimated_tuples_as_of, 
+			ci.dead_tuples, ci.last_autovacuum, ci.last_manual_nonfull_vacuum,
+		   ci.is_unique, ci.is_primary,
            ci.table_oid, ci.index_oid,
 			w.priority, w.warning_summary, w.warning_details, w.url
     FROM ci_indexes ci
