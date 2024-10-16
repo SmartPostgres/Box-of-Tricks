@@ -25,7 +25,8 @@ RETURNS TABLE (
     priority INTEGER, 
     warning_summary VARCHAR,
     warning_details VARCHAR,
-    url VARCHAR
+    url VARCHAR,
+    drop_object_command VARCHAR
 )
 LANGUAGE plpgsql
 AS $$
@@ -54,7 +55,8 @@ BEGIN
 		last_autovacuum TIMESTAMPTZ,
 		last_manual_nonfull_vacuum TIMESTAMPTZ,
 		last_analyze TIMESTAMPTZ,
-		last_autoanalyze TIMESTAMPTZ
+		last_autoanalyze TIMESTAMPTZ,
+		drop_object_command VARCHAR
     );
 
 	CREATE TEMPORARY TABLE ci_indexes_warnings
@@ -198,7 +200,7 @@ BEGIN
         c_tbl.table_name AS table_name,
         c_ix.relname AS index_name,
         am.amname AS index_type,
-        pg_get_indexdef(c_ix.oid) AS index_definition,
+        pg_get_indexdef(c_ix.oid) || '';'' AS index_definition,
         pg_relation_size(c_ix.oid) / 1024.0 AS size_kb,
         GREATEST(COALESCE(c_ix.reltuples, c_tbl.estimated_tuples, 0), 0) AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
@@ -264,7 +266,20 @@ BEGIN
 	  AND ix.dead_tuples <= 0;
 
 
-
+	-- Set the drop_object_command column's contents.
+	UPDATE ci_indexes ix
+		SET drop_object_command = CASE
+		    WHEN ix.index_type = 'ordinary table' THEN 'DROP TABLE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'sequence' THEN 'DROP SEQUENCE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'view' THEN 'DROP VIEW IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'materialized view' THEN 'DROP MATERIALIZED VIEW IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'composite type' THEN 'DROP TYPE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'foreign table' THEN 'DROP FOREIGN TABLE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'partitioned table' THEN 'DROP TABLE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
+		    WHEN ix.index_type IN ('brin', 'btree', 'gin', 'gist', 'hash', 'spgist')
+		        			THEN 'DROP INDEX IF EXISTS ' || ix.schema_name || '.' || ix.index_name || '; -- CASCADE ' 
+		    ELSE '' -- Not dropping TOAST tables or unknown types
+	END;
 
 
 	-- Process warnings starting with priority 100, Outdated Statistics.
@@ -293,7 +308,8 @@ BEGIN
 			ci.dead_tuples, ci.last_autovacuum, ci.last_manual_nonfull_vacuum,
 		   ci.is_unique, ci.is_primary,
            ci.table_oid, ci.index_oid,
-			w.priority, w.warning_summary, w.warning_details, w.url
+			w.priority, w.warning_summary, w.warning_details, w.url,
+			ci.drop_object_command
     FROM ci_indexes ci
 	LEFT OUTER JOIN ci_indexes_warnings w 
 		ON ci.table_oid = w.table_oid
