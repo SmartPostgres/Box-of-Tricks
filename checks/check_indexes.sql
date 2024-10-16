@@ -7,9 +7,9 @@ CREATE OR REPLACE FUNCTION check_indexes (
     v_warning_format VARCHAR default 'rows'
 )
 RETURNS TABLE (
-    schema_name VARCHAR,
-    table_name VARCHAR,
-    index_name VARCHAR,
+    schema_name TEXT,
+    table_name TEXT,
+    index_name TEXT,
     index_type VARCHAR,
     index_definition VARCHAR,
     size_kb INTEGER,
@@ -269,15 +269,15 @@ BEGIN
 	-- Set the drop_object_command column's contents.
 	UPDATE ci_indexes ix
 		SET drop_object_command = CASE
-		    WHEN ix.index_type = 'ordinary table' THEN 'DROP TABLE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
-		    WHEN ix.index_type = 'sequence' THEN 'DROP SEQUENCE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
-		    WHEN ix.index_type = 'view' THEN 'DROP VIEW IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
-		    WHEN ix.index_type = 'materialized view' THEN 'DROP MATERIALIZED VIEW IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
-		    WHEN ix.index_type = 'composite type' THEN 'DROP TYPE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
-		    WHEN ix.index_type = 'foreign table' THEN 'DROP FOREIGN TABLE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
-		    WHEN ix.index_type = 'partitioned table' THEN 'DROP TABLE IF EXISTS ' || ix.schema_name || '.' || ix.table_name || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'ordinary table' THEN 'DROP TABLE IF EXISTS ' || quote_ident(ix.schema_name) || '.' || quote_ident(ix.table_name) || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'sequence' THEN 'DROP SEQUENCE IF EXISTS ' || quote_ident(ix.schema_name) || '.' || quote_ident(ix.table_name) || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'view' THEN 'DROP VIEW IF EXISTS ' || quote_ident(ix.schema_name) || '.' || quote_ident(ix.table_name) || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'materialized view' THEN 'DROP MATERIALIZED VIEW IF EXISTS ' || quote_ident(ix.schema_name) || '.' || quote_ident(ix.table_name) || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'composite type' THEN 'DROP TYPE IF EXISTS ' || quote_ident(ix.schema_name) || '.' || quote_ident(ix.table_name) || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'foreign table' THEN 'DROP FOREIGN TABLE IF EXISTS ' || quote_ident(ix.schema_name) || '.' || quote_ident(ix.table_name) || '; -- CASCADE ' 
+		    WHEN ix.index_type = 'partitioned table' THEN 'DROP TABLE IF EXISTS ' || quote_ident(ix.schema_name) || '.' || quote_ident(ix.table_name) || '; -- CASCADE ' 
 		    WHEN ix.index_type IN ('brin', 'btree', 'gin', 'gist', 'hash', 'spgist')
-		        			THEN 'DROP INDEX IF EXISTS ' || ix.schema_name || '.' || ix.index_name || '; -- CASCADE ' 
+		        			THEN 'DROP INDEX IF EXISTS ' || quote_ident(ix.schema_name) || '.' || quote_ident(ix.index_name) || '; -- CASCADE ' 
 		    ELSE '' -- Not dropping TOAST tables or unknown types
 	END;
 
@@ -302,8 +302,10 @@ BEGIN
 
     -- Return the result set
     RETURN QUERY
-    SELECT ci.schema_name, ci.table_name, ci.index_name, ci.index_type,
-           ci.index_definition, ci.size_kb, ci.estimated_tuples,
+    SELECT quote_ident(ci.schema_name) as schema_name, 
+			quote_ident(ci.table_name) as table_name,
+			quote_ident(ci.index_name) as index_name, 
+			ci.index_type, ci.index_definition, ci.size_kb, ci.estimated_tuples,
            ci.estimated_tuples_as_of, 
 			ci.dead_tuples, ci.last_autovacuum, ci.last_manual_nonfull_vacuum,
 		   ci.is_unique, ci.is_primary,
