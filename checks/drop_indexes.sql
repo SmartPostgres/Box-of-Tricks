@@ -33,7 +33,7 @@ BEGIN
         Status := COALESCE(Status, '') || CASE WHEN COALESCE(Status, '') != '' THEN '|' ELSE 'ERROR: ' END || 'Table Name MUST be passed in';
     END IF;
     IF v_print_drops_but_dont_execute = TRUE AND v_list_indexes_being_dropped = FALSE THEN
-        Status := COALESCE(Status, '') || CASE WHEN COALESCE(Status, '') != '' THEN '|' ELSE 'ERROR: ' END || 'If printing DROP Statments indexes MUST be listed';
+        Status := COALESCE(Status, '') || CASE WHEN COALESCE(Status, '') != '' THEN '|' ELSE 'ERROR: ' END || 'If printing DROP Statements indexes MUST be listed';
         --Optional Alternative if instead of a message we just want to fix this case
         --v_list_indexes_being_dropped = TRUE
     END IF;
@@ -62,6 +62,7 @@ BEGIN
                 ELSE 
                     ''DROP INDEX '' || 
                     CASE WHEN ' || v_drop_concurrently || ' = TRUE THEN ''CONCURRENTLY '' ELSE '''' END || 
+					quote_ident(nm.nspname) || ''.'' ||
                     quote_ident(c_idx.relname) || 
                     CASE WHEN ' || v_force_drop_with_constraints || ' = TRUE THEN '' CASCADE'' ELSE '''' END
               END || '';''
