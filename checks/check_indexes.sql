@@ -148,7 +148,7 @@ BEGIN
 
     -- Build SQL for the underlying ordinary tables of the partitioned tables
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
 		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
 		n_mod_since_analyze, n_ins_since_vacuum, last_autovacuum, last_analyze, last_autoanalyze)
     SELECT
@@ -170,6 +170,7 @@ BEGIN
         pg_relation_size(c_tbl.oid) / 1024.0 AS size_kb,
         GREATEST(c_tbl.reltuples, 0) AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
+        stat.n_dead_tup AS dead_tuples,
         CAST(NULL AS BOOLEAN) AS is_unique,
         CAST(NULL AS BOOLEAN) AS is_primary,
         c_tbl.oid AS table_oid,
