@@ -34,6 +34,9 @@ AS $$
 DECLARE
     sql_to_execute TEXT;
 BEGIN
+
+	SET lock_timeout = '5s';
+
     CREATE TEMPORARY TABLE ci_indexes
     (
         schema_name VARCHAR,
@@ -75,6 +78,8 @@ BEGIN
 
 
     -- Build SQL for Tables & Materialized Views
+	RAISE NOTICE 'Build SQL for Tables & Materialized Views';
+
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
@@ -123,6 +128,8 @@ BEGIN
 
 
     -- Build SQL for TOAST Tables
+	RAISE NOTICE 'Build SQL for TOAST Tables';
+
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
 							dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
@@ -151,7 +158,10 @@ BEGIN
 
     EXECUTE sql_to_execute;
 
+
     -- Build SQL for the underlying ordinary tables of the partitioned tables
+	RAISE NOTICE 'Build SQL for the underlying ordinary tables of the partitioned tables';
+
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
 		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
@@ -198,7 +208,11 @@ BEGIN
     EXECUTE sql_to_execute;
 
 
+
+
     -- Build SQL for Indexes
+	RAISE NOTICE 'Build SQL for Indexes';
+
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
@@ -241,7 +255,10 @@ BEGIN
 
     EXECUTE sql_to_execute;
 
+
 	-- Update partitioned index data to include all child indexes and tables
+	RAISE NOTICE 'Update partitioned index data to include all child indexes and tables';
+
 	UPDATE ci_indexes tbl
 		SET size_kb = child.size_kb,
 			estimated_tuples = CASE WHEN tbl.estimated_tuples <= 0
@@ -274,7 +291,9 @@ BEGIN
 	  AND ix.dead_tuples <= 0;
 
 
-	-- Set the drop_object_command column's contents.
+	-- Set the drop_object_command column contents
+	RAISE NOTICE 'Set the drop_object_command column contents';
+
 	UPDATE ci_indexes ix
 		SET drop_object_command = CASE
 		    WHEN ix.index_type = 'ordinary table' THEN 'DROP TABLE IF EXISTS ' || quote_ident(ix.schema_name) || '.' || quote_ident(ix.table_name) || '; -- CASCADE ' 
@@ -292,6 +311,8 @@ BEGIN
 
 	-- Process warnings starting with priority 100, Outdated Statistics.
 
+	--100: Outdated Statistics
+	RAISE NOTICE '100: Outdated Statistics';
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 100, 
 		'Outdated Statistics' AS warning_summary,
@@ -308,7 +329,9 @@ BEGIN
     WHERE ABS(i.estimated_tuples::numeric) * 0.1 < GREATEST(i.n_ins_since_vacuum, i.n_mod_since_analyze);
 
 
-	-- 200: Autovacuum Settings Specified
+	--200: Autovacuum Settings Specified
+	RAISE NOTICE '200: Autovacuum Settings Specified';
+
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 200, 
 		'Autovacuum Settings Specified' AS warning_summary,
@@ -319,6 +342,8 @@ BEGIN
 
 
     -- Return the result set
+	RAISE NOTICE 'Return the result set';
+
     RETURN QUERY
     SELECT quote_ident(ci.schema_name) as schema_name, 
 		quote_ident(ci.table_name) as table_name,
