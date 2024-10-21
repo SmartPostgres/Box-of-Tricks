@@ -81,7 +81,7 @@ BEGIN
 	RAISE NOTICE 'Build SQL for Tables & Materialized Views';
 
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
 		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions)
     SELECT
@@ -100,7 +100,6 @@ BEGIN
             ELSE ''unknown''
         END AS index_type,
         NULL AS index_definition,
-        pg_relation_size(c_tbl.oid) / 1024.0 AS size_kb,
         GREATEST(c_tbl.reltuples, 0) AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
         stat.n_dead_tup AS dead_tuples,
@@ -131,7 +130,7 @@ BEGIN
 	RAISE NOTICE 'Build SQL for TOAST Tables';
 
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
 							dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
     SELECT
         c_tbl.schema_name AS schema_name,
@@ -139,7 +138,6 @@ BEGIN
         c_toast_tbl.relname AS index_name,
         ''toast'' AS index_type,
         NULL AS index_definition,
-        pg_relation_size(c_toast_tbl.oid) / 1024.0 AS size_kb,
         NULL AS estimated_tuples,
         NULL AS estimated_tuples_as_of,
 		NULL AS dead_tuples,
@@ -163,7 +161,7 @@ BEGIN
 	RAISE NOTICE 'Build SQL for the underlying ordinary tables of the partitioned tables';
 
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
 		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
 		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions)
     SELECT
@@ -182,7 +180,6 @@ BEGIN
             ELSE ''unknown''
         END AS index_type,
         NULL AS index_definition,
-        pg_relation_size(c_tbl.oid) / 1024.0 AS size_kb,
         GREATEST(c_tbl.reltuples, 0) AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
         stat.n_dead_tup AS dead_tuples,
@@ -212,17 +209,14 @@ BEGIN
 
     -- Build SQL for Indexes
 	RAISE NOTICE 'Build SQL for Indexes';
-
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
     SELECT
         c_tbl.schema_name AS schema_name,
         c_tbl.table_name AS table_name,
         c_ix.relname AS index_name,
         am.amname AS index_type,
-        pg_get_indexdef(c_ix.oid) || '';'' AS index_definition,
-        pg_relation_size(c_ix.oid) / 1024.0 AS size_kb,
         GREATEST(COALESCE(c_ix.reltuples, c_tbl.estimated_tuples, 0), 0) AS estimated_tuples,
         GREATEST(stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze) AS estimated_tuples_as_of,
         c_tbl.dead_tuples,
@@ -254,6 +248,15 @@ BEGIN
 	WHERE c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
 
     EXECUTE sql_to_execute;
+
+
+	-- Get Object Sizes Except Stuff Being Vacuumed
+	RAISE NOTICE 'Get Object Sizes Except Stuff Being Vacuumed';
+	UPDATE ci_indexes tbl
+		SET size_kb = pg_relation_size(COALESCE(tbl.index_oid, tbl.table_oid)) / 1024.0,
+			index_definition = pg_get_indexdef(tbl.index_oid) || ';'
+		WHERE COALESCE(tbl.index_oid, tbl.table_oid) IS NOT NULL
+		AND tbl.table_oid NOT IN (SELECT relid FROM pg_catalog.pg_stat_progress_cluster);
 
 
 	-- Update partitioned index data to include all child indexes and tables
@@ -309,7 +312,27 @@ BEGIN
 	END;
 
 
-	-- Process warnings starting with priority 100, Outdated Statistics.
+	-- Process warnings.
+
+	--1: Vacuum Full or Cluster Running Now
+	RAISE NOTICE '1: Vacuum Full or Cluster Running Now';
+	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
+	SELECT i.table_oid, i.index_oid, 1, 
+		'Vacuum Full or Cluster Running Now' AS warning_summary,
+		'The table is offline right now for maintenance. '
+			|| ' Command: ' || prog.command 
+			|| ' Phase: ' || prog.phase 
+			|| ' heap_tuples_scanned: ' || prog.heap_tuples_scanned 
+			|| ' heap_tuples_written: ' || prog.heap_tuples_written
+			|| ' heap_blks_total: ' || prog.heap_blks_total
+			|| ' heap_blks_scanned: ' || prog.heap_blks_scanned
+			|| ' index_rebuild_count: ' || prog.index_rebuild_count
+			 AS warning_details,
+	'https://smartpostgres.com/problems/vacuum_running_now' AS url
+	FROM ci_indexes i
+		JOIN pg_catalog.pg_stat_progress_cluster prog
+			on i.table_oid = prog.relid;
+
 
 	--100: Outdated Statistics
 	RAISE NOTICE '100: Outdated Statistics';
