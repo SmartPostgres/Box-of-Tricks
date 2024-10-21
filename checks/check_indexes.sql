@@ -292,6 +292,26 @@ BEGIN
 
 	-- Process warnings starting with priority 100, Outdated Statistics.
 
+	--1: Vacuum Full or Cluster Running Now
+	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
+	SELECT i.table_oid, i.index_oid, 1, 
+		'Vacuum Full or Cluster Running Now' AS warning_summary,
+		'The table is offline right now for maintenance. '
+			|| ' Command: ' || prog.command 
+			|| ' Phase: ' || prog.phase 
+			|| ' heap_tuples_scanned: ' || prog.heap_tuples_scanned 
+			|| ' heap_tuples_written: ' || prog.heap_tuples_written
+			|| ' heap_blks_total: ' || prog.heap_blks_total
+			|| ' heap_blks_scanned: ' || prog.heap_blks_scanned
+			|| ' index_rebuild_count: ' || prog.index_rebuild_count
+			 AS warning_details,
+	'https://smartpostgres.com/problems/vacuum_running_now' AS url
+	FROM ci_indexes i
+		JOIN pg_catalog.pg_stat_progress_cluster prog
+			on i.table_oid = prog.relid;
+
+
+	--100: Outdated Statistics
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 100, 
 		'Outdated Statistics' AS warning_summary,
