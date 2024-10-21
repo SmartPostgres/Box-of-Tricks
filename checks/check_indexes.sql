@@ -26,6 +26,7 @@ RETURNS TABLE (
     warning_summary VARCHAR,
     warning_details VARCHAR,
     url VARCHAR,
+	reloptions VARCHAR,
     drop_object_command VARCHAR
 )
 LANGUAGE plpgsql
@@ -56,6 +57,7 @@ BEGIN
 		last_manual_nonfull_vacuum TIMESTAMPTZ,
 		last_analyze TIMESTAMPTZ,
 		last_autoanalyze TIMESTAMPTZ,
+		reloptions VARCHAR,
 		drop_object_command VARCHAR
     );
 
@@ -76,7 +78,7 @@ BEGIN
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze)
+		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -103,7 +105,8 @@ BEGIN
         CAST(NULL AS INTEGER) AS index_oid,
 		c_tbl.relkind,
         c_tbl.reltoastrelid,
-		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze
+		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
+		c_tbl.reloptions
     FROM
         pg_catalog.pg_class c_tbl
     JOIN pg_catalog.pg_namespace nm ON
@@ -121,7 +124,8 @@ BEGIN
 
     -- Build SQL for TOAST Tables
     sql_to_execute := '
-    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind)
+    INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
+							dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
     SELECT
         c_tbl.schema_name AS schema_name,
         c_tbl.table_name AS table_name,
@@ -136,7 +140,8 @@ BEGIN
         NULL AS is_primary,
         c_tbl.table_oid AS table_oid,
         c_toast_tbl.oid AS index_oid,
-        c_toast_tbl.relkind AS relkind
+        c_toast_tbl.relkind AS relkind,
+		c_tbl.reloptions
     FROM
         ci_indexes c_tbl
     JOIN 
@@ -150,7 +155,7 @@ BEGIN
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
 		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze)
+		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -177,7 +182,8 @@ BEGIN
         CAST(NULL AS INTEGER) AS index_oid,
 		c_tbl.relkind,
         c_tbl.reltoastrelid,
-		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze
+		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
+		c_tbl.reloptions
     FROM pg_catalog.pg_inherits inh 
     JOIN pg_catalog.pg_class c_tbl ON inh.inhrelid = c_tbl.oid
     JOIN pg_catalog.pg_namespace nm ON
@@ -195,7 +201,7 @@ BEGIN
     -- Build SQL for Indexes
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, size_kb, estimated_tuples, estimated_tuples_as_of, 
-		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind)
+		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
     SELECT
         c_tbl.schema_name AS schema_name,
         c_tbl.table_name AS table_name,
@@ -212,7 +218,8 @@ BEGIN
         indisprimary AS is_primary,
         c_tbl.table_oid AS table_oid,
         c_ix.oid AS index_oid,
-        c_ix.relkind
+        c_ix.relkind,
+		c_ix.reloptions
     FROM
         ci_indexes c_tbl
     JOIN 
@@ -301,18 +308,29 @@ BEGIN
     WHERE ABS(i.estimated_tuples::numeric) * 0.1 < GREATEST(i.n_ins_since_vacuum, i.n_mod_since_analyze);
 
 
+	-- 200: Autovacuum Settings Specified
+	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
+	SELECT i.table_oid, i.index_oid, 200, 
+		'Autovacuum Settings Specified' AS warning_summary,
+		'See the reloptions column for details. Someone set the settings for this specific object.' AS warning_details,
+	'https://smartpostgres.com/problems/autovacuum_settings_specified' AS url
+	FROM ci_indexes i
+    WHERE i.reloptions like '%autovacuum%';
+
+
     -- Return the result set
     RETURN QUERY
     SELECT quote_ident(ci.schema_name) as schema_name, 
-			quote_ident(ci.table_name) as table_name,
-			quote_ident(ci.index_name) as index_name, 
-			ci.index_type, ci.index_definition, ci.size_kb, ci.estimated_tuples,
-           ci.estimated_tuples_as_of, 
-			ci.dead_tuples, ci.last_autovacuum, ci.last_manual_nonfull_vacuum,
-		   ci.is_unique, ci.is_primary,
-           ci.table_oid, ci.index_oid,
-			w.priority, w.warning_summary, w.warning_details, w.url,
-			ci.drop_object_command
+		quote_ident(ci.table_name) as table_name,
+		quote_ident(ci.index_name) as index_name, 
+		ci.index_type, ci.index_definition, ci.size_kb, ci.estimated_tuples,
+		ci.estimated_tuples_as_of, 
+		ci.dead_tuples, ci.last_autovacuum, ci.last_manual_nonfull_vacuum,
+		ci.is_unique, ci.is_primary,
+		ci.table_oid, ci.index_oid,
+		w.priority, w.warning_summary, w.warning_details, w.url,
+		ci.reloptions,
+		ci.drop_object_command
     FROM ci_indexes ci
 	LEFT OUTER JOIN ci_indexes_warnings w 
 		ON ci.table_oid = w.table_oid
