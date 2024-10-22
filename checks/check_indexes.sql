@@ -26,7 +26,7 @@ RETURNS TABLE (
     warning_summary VARCHAR,
     warning_details VARCHAR,
     url VARCHAR,
-	reloptions VARCHAR,
+	reloptions TEXT,
     drop_object_command VARCHAR
 )
 LANGUAGE plpgsql
@@ -67,7 +67,7 @@ BEGIN
 		last_manual_nonfull_vacuum TIMESTAMPTZ,
 		last_analyze TIMESTAMPTZ,
 		last_autoanalyze TIMESTAMPTZ,
-		reloptions VARCHAR,
+		reloptions TEXT,
 		drop_object_command VARCHAR
     );
 
@@ -339,6 +339,70 @@ BEGIN
 	FROM ci_indexes i
 		JOIN pg_catalog.pg_stat_progress_cluster prog
 			on i.table_oid = prog.relid;
+
+
+	--50: Autovacuum Not Keeping Up
+	RAISE NOTICE '50: Autovacuum Not Keeping Up';
+	WITH settings AS (
+	    -- Get the default autovacuum settings from the server
+	    SELECT 
+	        (SELECT setting::integer FROM pg_settings WHERE name = 'autovacuum_vacuum_threshold') AS vacuum_threshold,
+	        (SELECT setting::float FROM pg_settings WHERE name = 'autovacuum_vacuum_scale_factor') AS vacuum_scale_factor
+	),
+	table_vacuum_settings AS (
+	    -- Calculate the autovacuum thresholds per table
+	    SELECT 
+	        c_tbl.table_oid,
+	        psut.n_dead_tup,
+	        COALESCE((
+	            SELECT substring(option FROM 'autovacuum_vacuum_threshold=([0-9]+)')::integer
+	            FROM unnest(c.reloptions) AS option
+	            WHERE option LIKE 'autovacuum_vacuum_threshold%'
+	        ), settings.vacuum_threshold) AS autovacuum_vacuum_threshold,
+	        COALESCE((
+	            SELECT substring(option FROM 'autovacuum_vacuum_scale_factor=([0-9\.]+)')::float
+	            FROM unnest(c.reloptions) AS option
+	            WHERE option LIKE 'autovacuum_vacuum_scale_factor%'
+	        ), settings.vacuum_scale_factor) AS autovacuum_vacuum_scale_factor,
+	        c_tbl.estimated_tuples
+	    FROM 
+			ci_indexes c_tbl
+		JOIN
+	        pg_stat_user_tables psut ON c_tbl.table_oid = psut.relid
+		JOIN pg_class c ON c_tbl.table_oid = c.oid
+	    CROSS JOIN settings
+		WHERE c_tbl.index_oid IS NULL
+	)
+	INSERT INTO ci_indexes_warnings (table_oid, priority, warning_summary, warning_details, url)
+	SELECT 
+	    tvs.table_oid, 
+		50 as priority, 'Autovacuum Not Keeping Up' as warning_summary,
+		'Vacuum threshold for this object: '
+			|| (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples))::varchar
+			|| ' tuples.' as warning_details,
+		'https://smartpostgres.com/problems/autovacuum_not_keeping_up' AS url
+	FROM 
+	    table_vacuum_settings tvs
+	WHERE 
+	    -- Show tables where dead tuples exceed the effective autovacuum threshold
+	    tvs.n_dead_tup > (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples));
+
+
+	/* BGO FIXFIX:
+		This does not include a percentage threshold above for warning purposes,
+			but just immediately fires if we are even 1 row above the autovacuum
+			threshold, which is probably too noisy. We probably want to alert
+			when we are say 10% over the threshold.
+
+		This query is running by using pg_class.reloptions.
+			I want it to run based on c_tbl.reloptions instead.
+
+		I do not know that the estimated tuple threshold reporting is accurate
+			from the formula written by ChatGPT.
+	*/
+
+
+
 
 
 	--100: Outdated Statistics
