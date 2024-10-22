@@ -35,6 +35,13 @@ DECLARE
     sql_to_execute TEXT;
 BEGIN
 
+
+	/* Time bomb because this function is early in development,
+		and we expect fast and furious changes in the first 6 months. */
+    IF CURRENT_DATE > '2024-12-01' THEN
+        RAISE EXCEPTION 'Error: this is an old version of check_indexes. Get the latest from SmartPostgres.com.';
+    END IF;
+
 	SET lock_timeout = '5s';
 
     CREATE TEMPORARY TABLE ci_indexes
