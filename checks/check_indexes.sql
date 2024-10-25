@@ -422,6 +422,30 @@ BEGIN
     WHERE ABS(i.estimated_tuples::numeric) * 0.1 < GREATEST(i.n_ins_since_vacuum, i.n_mod_since_analyze);
 
 
+
+	--50: Vacuum Running Now
+	RAISE NOTICE '50: Vacuum Running Now';
+	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
+	SELECT i.table_oid, i.index_oid, 50, 
+		'Vacuum Running Now' AS warning_summary,
+		'The table is online, but maintenance is happening: '
+			|| ' Phase: ' || prog.phase 
+			|| ' heap_blks_total: ' || prog.heap_blks_total
+			|| ' heap_blks_scanned: ' || prog.heap_blks_scanned
+			|| ' heap_blks_vacuumed: ' || prog.heap_blks_vacuumed
+			|| ' index_vacuum_count: ' || prog.index_vacuum_count
+			 AS warning_details,
+	'https://smartpostgres.com/problems/vacuum_running_now' AS url
+	FROM ci_indexes i
+		JOIN pg_catalog.pg_stat_progress_vacuum prog
+			on i.table_oid = prog.relid;
+
+
+
+
+
+
+
 	--200: Autovacuum Settings Specified
 	RAISE NOTICE '200: Autovacuum Settings Specified';
 
