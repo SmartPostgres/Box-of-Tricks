@@ -26,7 +26,7 @@ RETURNS TABLE (
     warning_summary VARCHAR,
     warning_details VARCHAR,
     url VARCHAR,
-	reloptions TEXT,
+	reloptions TEXT[],
     drop_object_command VARCHAR
 )
 LANGUAGE plpgsql
@@ -67,7 +67,7 @@ BEGIN
 		last_manual_nonfull_vacuum TIMESTAMPTZ,
 		last_analyze TIMESTAMPTZ,
 		last_autoanalyze TIMESTAMPTZ,
-		reloptions TEXT,
+		reloptions TEXT[],
 		drop_object_command VARCHAR
     );
 
@@ -356,12 +356,12 @@ BEGIN
 	        psut.n_dead_tup,
 	        COALESCE((
 	            SELECT substring(option FROM 'autovacuum_vacuum_threshold=([0-9]+)')::integer
-	            FROM unnest(c.reloptions) AS option
+	            FROM unnest(c_tbl.reloptions) AS option
 	            WHERE option LIKE 'autovacuum_vacuum_threshold%'
 	        ), settings.vacuum_threshold) AS autovacuum_vacuum_threshold,
 	        COALESCE((
 	            SELECT substring(option FROM 'autovacuum_vacuum_scale_factor=([0-9\.]+)')::float
-	            FROM unnest(c.reloptions) AS option
+	            FROM unnest(c_tbl.reloptions) AS option
 	            WHERE option LIKE 'autovacuum_vacuum_scale_factor%'
 	        ), settings.vacuum_scale_factor) AS autovacuum_vacuum_scale_factor,
 	        c_tbl.estimated_tuples
@@ -369,7 +369,6 @@ BEGIN
 			ci_indexes c_tbl
 		JOIN
 	        pg_stat_user_tables psut ON c_tbl.table_oid = psut.relid
-		JOIN pg_class c ON c_tbl.table_oid = c.oid
 	    CROSS JOIN settings
 		WHERE c_tbl.index_oid IS NULL
 	)
@@ -432,7 +431,7 @@ BEGIN
 		'See the reloptions column for details. Someone set the settings for this specific object.' AS warning_details,
 	'https://smartpostgres.com/problems/autovacuum_settings_specified' AS url
 	FROM ci_indexes i
-    WHERE i.reloptions like '%autovacuum%';
+    WHERE array_to_string(i.reloptions, ', ') like '%autovacuum%';
 
 
     -- Return the result set
