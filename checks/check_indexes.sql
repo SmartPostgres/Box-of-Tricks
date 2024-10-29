@@ -423,10 +423,10 @@ BEGIN
 
 
 
-	--50: Vacuum Running Now
-	RAISE NOTICE '50: Vacuum Running Now';
+	--150: Vacuum Running Now
+	RAISE NOTICE '150: Vacuum Running Now';
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
-	SELECT i.table_oid, i.index_oid, 50, 
+	SELECT i.table_oid, i.index_oid, 150, 
 		'Vacuum Running Now' AS warning_summary,
 		'The table is online, but maintenance is happening: '
 			|| ' Phase: ' || prog.phase 
