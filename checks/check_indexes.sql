@@ -4,7 +4,8 @@
 CREATE OR REPLACE FUNCTION check_indexes (
     v_schema_name VARCHAR,
     v_table_name VARCHAR,
-    v_warning_format VARCHAR default 'rows'
+    v_warning_format VARCHAR default 'rows',
+    v_debug_level INTEGER default 0
 )
 RETURNS TABLE (
     schema_name TEXT,
@@ -41,6 +42,8 @@ BEGIN
     IF CURRENT_DATE > '2024-12-01' THEN
         RAISE EXCEPTION 'Error: this is an old version of check_indexes. Get the latest from SmartPostgres.com.';
     END IF;
+
+	/* v_debug_level: 0 = no messages, 1 = critical messages, 2 = all messages */
 
 	SET lock_timeout = '5s';
 
@@ -85,7 +88,9 @@ BEGIN
 
 
     -- Build SQL for Tables & Materialized Views
-	RAISE NOTICE 'Build SQL for Tables & Materialized Views';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Build SQL for Tables & Materialized Views';
+	END IF;
 
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
@@ -134,7 +139,9 @@ BEGIN
 
 
     -- Build SQL for TOAST Tables
-	RAISE NOTICE 'Build SQL for TOAST Tables';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Build SQL for TOAST Tables';
+	END IF;
 
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
@@ -165,7 +172,9 @@ BEGIN
 
 
     -- Build SQL for the underlying ordinary tables of the partitioned tables
-	RAISE NOTICE 'Build SQL for the underlying ordinary tables of the partitioned tables';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Build SQL for the underlying ordinary tables of the partitioned tables';
+	END IF;
 
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
@@ -215,7 +224,9 @@ BEGIN
 
 
     -- Build SQL for Indexes
-	RAISE NOTICE 'Build SQL for Indexes';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Build SQL for Indexes';
+	END IF;
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
@@ -258,7 +269,9 @@ BEGIN
 
 
 	-- Get Object Sizes Except Stuff Being Vacuumed
-	RAISE NOTICE 'Get Object Sizes Except Stuff Being Vacuumed';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Get Object Sizes Except Stuff Being Vacuumed';
+	END IF;
 	UPDATE ci_indexes tbl
 		SET size_kb = pg_relation_size(COALESCE(tbl.index_oid, tbl.table_oid)) / 1024.0,
 			index_definition = pg_get_indexdef(tbl.index_oid) || ';'
@@ -267,7 +280,9 @@ BEGIN
 
 
 	-- Update partitioned index data to include all child indexes and tables
-	RAISE NOTICE 'Update partitioned index data to include all child indexes and tables';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Update partitioned index data to include all child indexes and tables';
+	END IF;
 
 	UPDATE ci_indexes tbl
 		SET size_kb = child.size_kb,
@@ -302,7 +317,9 @@ BEGIN
 
 
 	-- Set the drop_object_command column contents
-	RAISE NOTICE 'Set the drop_object_command column contents';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Set the drop_object_command column contents';
+	END IF;
 
 	UPDATE ci_indexes ix
 		SET drop_object_command = CASE
@@ -322,7 +339,10 @@ BEGIN
 	-- Process warnings.
 
 	--1: Vacuum Full or Cluster Running Now
-	RAISE NOTICE '1: Vacuum Full or Cluster Running Now';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '1: Vacuum Full or Cluster Running Now';
+	END IF;
+
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 1, 
 		'Vacuum Full or Cluster Running Now' AS warning_summary,
@@ -342,12 +362,16 @@ BEGIN
 
 
 	--50: Autovacuum Not Keeping Up
-	RAISE NOTICE '50: Autovacuum Not Keeping Up';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '50: Autovacuum Not Keeping Up';
+	END IF;
+
 	WITH settings AS (
 	    -- Get the default autovacuum settings from the server
 	    SELECT 
 	        (SELECT setting::integer FROM pg_settings WHERE name = 'autovacuum_vacuum_threshold') AS vacuum_threshold,
-	        (SELECT setting::float FROM pg_settings WHERE name = 'autovacuum_vacuum_scale_factor') AS vacuum_scale_factor
+	        (SELECT setting::float FROM pg_settings WHERE name = 'autovacuum_vacuum_scale_factor') AS vacuum_scale_factor,
+	        (SELECT setting::boolean FROM pg_settings WHERE name = 'autovacuum') AS autovacuum_enabled
 	),
 	table_vacuum_settings AS (
 	    -- Calculate the autovacuum thresholds per table
@@ -364,6 +388,11 @@ BEGIN
 	            FROM unnest(c_tbl.reloptions) AS option
 	            WHERE option LIKE 'autovacuum_vacuum_scale_factor%'
 	        ), settings.vacuum_scale_factor) AS autovacuum_vacuum_scale_factor,
+	        COALESCE((
+	            SELECT split_part(option, '=', 2)::boolean
+	            FROM unnest(c_tbl.reloptions) AS option
+	            WHERE option LIKE 'autovacuum_enabled%'
+	        ), settings.autovacuum_enabled) AS autovacuum_enabled,
 	        c_tbl.estimated_tuples
 	    FROM 
 			ci_indexes c_tbl
@@ -384,28 +413,18 @@ BEGIN
 	    table_vacuum_settings tvs
 	WHERE 
 	    -- Show tables where dead tuples exceed the effective autovacuum threshold
-	    tvs.n_dead_tup > (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples));
-
-
-	/* BGO FIXFIX:
-		This does not include a percentage threshold above for warning purposes,
-			but just immediately fires if we are even 1 row above the autovacuum
-			threshold, which is probably too noisy. We probably want to alert
-			when we are say 10% over the threshold.
-
-		This query is running by using pg_class.reloptions.
-			I want it to run based on c_tbl.reloptions instead.
-
-		I do not know that the estimated tuple threshold reporting is accurate
-			from the formula written by ChatGPT.
-	*/
+	    (tvs.n_dead_tup * 1.1) > (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples))
+		AND tvs.autovacuum_enabled <> false;
 
 
 
 
 
 	--100: Outdated Statistics
-	RAISE NOTICE '100: Outdated Statistics';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '100: Outdated Statistics';
+	END IF;
+
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 100, 
 		'Outdated Statistics' AS warning_summary,
@@ -424,7 +443,10 @@ BEGIN
 
 
 	--150: Vacuum Running Now
-	RAISE NOTICE '150: Vacuum Running Now';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '150: Vacuum Running Now';
+	END IF;
+
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 150, 
 		'Vacuum Running Now' AS warning_summary,
@@ -447,7 +469,9 @@ BEGIN
 
 
 	--200: Autovacuum Settings Specified
-	RAISE NOTICE '200: Autovacuum Settings Specified';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '200: Autovacuum Settings Specified';
+	END IF;
 
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 200, 
@@ -459,7 +483,9 @@ BEGIN
 
 
     -- Return the result set
-	RAISE NOTICE 'Return the result set';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Return the result set';
+	END IF;
 
     RETURN QUERY
     SELECT quote_ident(ci.schema_name) as schema_name, 
