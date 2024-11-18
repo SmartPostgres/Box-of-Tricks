@@ -95,7 +95,8 @@ BEGIN
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions)
+		last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions,
+		n_mod_since_analyze, n_ins_since_vacuum)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -121,8 +122,20 @@ BEGIN
         CAST(NULL AS INTEGER) AS index_oid,
 		c_tbl.relkind,
         c_tbl.reltoastrelid,
-		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
-		c_tbl.reloptions
+		 stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
+		c_tbl.reloptions, '
+		|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+				        WHERE c.table_schema = 'pg_catalog'
+				          AND c.table_name = 'pg_stat_user_tables'
+				          AND c.column_name = 'n_mod_since_analyze')
+				THEN ' stat.n_mod_since_analyze, '
+				ELSE ' NULL, ' END
+		|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+				        WHERE c.table_schema = 'pg_catalog'
+				          AND c.table_name = 'pg_stat_user_tables'
+				          AND c.column_name = 'n_ins_since_vacuum')
+				THEN ' stat.n_ins_since_vacuum '
+				ELSE ' NULL ' END || '
     FROM
         pg_catalog.pg_class c_tbl
     JOIN pg_catalog.pg_namespace nm ON
@@ -179,7 +192,7 @@ BEGIN
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
 		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions)
+		last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions, n_mod_since_analyze, n_ins_since_vacuum)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -205,8 +218,20 @@ BEGIN
         CAST(NULL AS INTEGER) AS index_oid,
 		c_tbl.relkind,
         c_tbl.reltoastrelid,
-		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
-		c_tbl.reloptions
+		stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
+		c_tbl.reloptions, '
+		|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+				        WHERE c.table_schema = 'pg_catalog'
+				          AND c.table_name = 'pg_stat_user_tables'
+				          AND c.column_name = 'n_mod_since_analyze')
+				THEN ' stat.n_mod_since_analyze, '
+				ELSE ' NULL, ' END
+		|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+				        WHERE c.table_schema = 'pg_catalog'
+				          AND c.table_name = 'pg_stat_user_tables'
+				          AND c.column_name = 'n_ins_since_vacuum')
+				THEN ' stat.n_ins_since_vacuum '
+				ELSE ' NULL ' END || '
     FROM pg_catalog.pg_inherits inh 
     JOIN pg_catalog.pg_class c_tbl ON inh.inhrelid = c_tbl.oid
     JOIN pg_catalog.pg_namespace nm ON
