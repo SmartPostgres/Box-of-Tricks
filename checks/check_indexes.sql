@@ -39,7 +39,7 @@ BEGIN
 
 	/* Time bomb because this function is early in development,
 		and we expect fast and furious changes in the first 6 months. */
-    IF CURRENT_DATE > '2024-12-01' THEN
+    IF CURRENT_DATE > '2025-02-01' THEN
         RAISE EXCEPTION 'Error: this is an old version of check_indexes. Get the latest from SmartPostgres.com.';
     END IF;
 
@@ -472,20 +472,57 @@ BEGIN
 		RAISE NOTICE '150: Vacuum Running Now';
 	END IF;
 
+    sql_to_execute := '
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 150, 
-		'Vacuum Running Now' AS warning_summary,
-		'The table is online, but maintenance is happening: '
-			|| ' Phase: ' || prog.phase 
-			|| ' heap_blks_total: ' || prog.heap_blks_total
-			|| ' heap_blks_scanned: ' || prog.heap_blks_scanned
-			|| ' heap_blks_vacuumed: ' || prog.heap_blks_vacuumed
-			|| ' index_vacuum_count: ' || prog.index_vacuum_count
-			 AS warning_details,
-	'https://smartpostgres.com/problems/vacuum_running_now' AS url
+		''Vacuum Running Now'' AS warning_summary,
+		''The table is online, but maintenance is happening: ''
+			|| '' Phase: '' || prog.phase 
+			|| '' heap_blks_total: '' || prog.heap_blks_total
+			|| '' heap_blks_scanned: '' || prog.heap_blks_scanned
+			|| '' heap_blks_vacuumed: '' || prog.heap_blks_vacuumed
+			|| '' index_vacuum_count: '' || prog.index_vacuum_count '
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'max_dead_tuple_bytes')
+					THEN ' || '' max_dead_tuple_bytes: '' || prog.max_dead_tuple_bytes '
+					ELSE '' END
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'dead_tuple_bytes')
+					THEN ' || '' dead_tuple_bytes: '' || prog.dead_tuple_bytes '
+					ELSE '' END
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'num_dead_item_ids')
+					THEN ' || '' num_dead_item_ids: '' || prog.num_dead_item_ids '
+					ELSE '' END
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'indexes_total')
+					THEN ' || '' indexes_total: '' || prog.indexes_total '
+					ELSE '' END
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'indexes_processed')
+					THEN ' || '' indexes_processed: '' || prog.indexes_processed '
+					ELSE '' END
+			|| ' AS warning_details,
+	''https://smartpostgres.com/problems/vacuum_running_now'' AS url
 	FROM ci_indexes i
 		JOIN pg_catalog.pg_stat_progress_vacuum prog
-			on i.table_oid = prog.relid;
+			on i.table_oid = prog.relid;';
+
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
+
+	EXECUTE sql_to_execute;
 
 
 
