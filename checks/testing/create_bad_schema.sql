@@ -22,20 +22,6 @@ CREATE TABLE public.users (
     "ヅ" VARCHAR
 );
 
--- Set the autovacuum settings
-alter table public.users set (autovacuum_enabled = false);
-
-ALTER TABLE public.users 
-    SET (autovacuum_vacuum_threshold = 10000,  -- Minimum number of dead tuples before vacuuming starts
-         autovacuum_vacuum_scale_factor = 0.0,  -- Percentage of the table size that triggers a vacuum
-         autovacuum_analyze_threshold = 500,  -- Minimum number of tuple changes before analyze starts
-         autovacuum_analyze_scale_factor = 0.02,  -- Percentage of the table size that triggers an analyze
-         autovacuum_vacuum_cost_delay = 20,  -- Delay in milliseconds between vacuum operations
-         autovacuum_vacuum_cost_limit = 2000,  -- Cost limit for vacuuming before taking a delay
-         autovacuum_freeze_max_age = 200000000,  -- Maximum age of tuples before forcing a vacuum to prevent transaction wraparound
-         autovacuum_multixact_freeze_max_age = 400000000);  -- Maximum age of multixact before vacuum forces wraparound prevention
-
-
 -- Optionally, reset the settings back to the default values:
 -- ALTER TABLE sales RESET (autovacuum_enabled, autovacuum_vacuum_threshold, autovacuum_vacuum_scale_factor, 
 --                          autovacuum_analyze_threshold, autovacuum_analyze_scale_factor, autovacuum_vacuum_cost_delay, 
