@@ -148,6 +148,10 @@ BEGIN
         AND (c_tbl.relname = ' || COALESCE(quote_literal(v_table_name), 'c_tbl.relname') || ')
         AND c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
 
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
+
     EXECUTE sql_to_execute;
 
 
@@ -180,6 +184,10 @@ BEGIN
         pg_catalog.pg_class c_toast_tbl
         ON c_tbl.reltoastrelid = c_toast_tbl.oid
 	WHERE c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
+
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
 
     EXECUTE sql_to_execute;
 
@@ -243,6 +251,10 @@ BEGIN
     AND EXISTS (SELECT 1 FROM ci_indexes WHERE inhparent = table_oid)         --Only add in the inheritents of a table you are looking at already
     AND NOT EXISTS (SELECT 1 FROM ci_indexes WHERE c_tbl.oid = table_oid);';  --Don't add it in twice if you asked for null and got all tables above
 
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
+
     EXECUTE sql_to_execute;
 
 
@@ -289,6 +301,10 @@ BEGIN
         pg_catalog.pg_stat_user_tables stat ON
         stat.relid = i.indrelid
 	WHERE c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
+
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
 
     EXECUTE sql_to_execute;
 
