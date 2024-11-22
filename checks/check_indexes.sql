@@ -454,7 +454,7 @@ BEGIN
 	    table_vacuum_settings tvs
 	WHERE 
 	    -- Show tables where dead tuples exceed the effective autovacuum threshold
-	    (tvs.n_dead_tup * 1.1) > (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples))
+	    tvs.n_dead_tup > (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples)) * 1.1
 		AND tvs.autovacuum_enabled <> false;
 
 
