@@ -396,7 +396,7 @@ BEGIN
 			|| ' heap_blks_scanned: ' || prog.heap_blks_scanned
 			|| ' index_rebuild_count: ' || prog.index_rebuild_count
 			 AS warning_details,
-	'https://smartpostgres.com/problems/vacuum_running_now' AS url
+	'https://smartpostgres.com/problems/vacuum-running-now' AS url
 	FROM ci_indexes i
 		JOIN pg_catalog.pg_stat_progress_cluster prog
 			on i.table_oid = prog.relid;
@@ -449,7 +449,7 @@ BEGIN
 		'Vacuum threshold for this object: '
 			|| (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples))::varchar
 			|| ' tuples.' as warning_details,
-		'https://smartpostgres.com/problems/autovacuum_not_keeping_up' AS url
+		'https://smartpostgres.com/problems/autovacuum-not-keeping-up' AS url
 	FROM 
 	    table_vacuum_settings tvs
 	WHERE 
@@ -477,7 +477,7 @@ BEGIN
 			|| i.n_mod_since_analyze::varchar || ' mod_since_analyze.' 
 			|| ' last_analyze on ' || COALESCE(i.last_analyze::date::varchar, '(never)')
 			|| '. last_autoanalyze on ' || COALESCE(i.last_autoanalyze::date::varchar, '(never)') AS warning_details,
-	'https://smartpostgres.com/problems/outdated_statistics' AS url
+	'https://smartpostgres.com/problems/outdated-statistics' AS url
 	FROM ci_indexes i
     WHERE ABS(i.estimated_tuples::numeric) * 0.1 < GREATEST(i.n_ins_since_vacuum, i.n_mod_since_analyze);
 
@@ -529,7 +529,7 @@ BEGIN
 					THEN ' || '' indexes_processed: '' || prog.indexes_processed '
 					ELSE '' END
 			|| ' AS warning_details,
-	''https://smartpostgres.com/problems/vacuum_running_now'' AS url
+	''https://smartpostgres.com/problems/vacuum-running-now'' AS url
 	FROM ci_indexes i
 		JOIN pg_catalog.pg_stat_progress_vacuum prog
 			on i.table_oid = prog.relid;';
@@ -555,7 +555,7 @@ BEGIN
 	SELECT i.table_oid, i.index_oid, 200, 
 		'Autovacuum Settings Specified' AS warning_summary,
 		'See the reloptions column for details. Someone set the settings for this specific object.' AS warning_details,
-	'https://smartpostgres.com/problems/autovacuum_settings_specified' AS url
+	'https://smartpostgres.com/problems/autovacuum-settings-specified' AS url
 	FROM ci_indexes i
     WHERE array_to_string(i.reloptions, ', ') like '%autovacuum%';
 
