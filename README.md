@@ -20,7 +20,8 @@
 <h3 align="center">Smart Postgres Box of Tricks</h3>
 
   <p align="center">
-    Utility scripts to make PostgreSQL performance tuning easier.
+    Utility scripts to make PostgreSQL performance tuning easier.<br />
+    Brought to you by the folks at <a href="https://SmartPostgres.com">SmartPostgres.com</a>.
     <br />
     <a href="https://github.com/SmartPostgres/Box-of-Tricks/issues/new?assignees=&labels=bug&projects=&template=bug_report.md&title=">Report Bug</a>
     ·
@@ -134,10 +135,6 @@ Distributed under the MIT License. [See the LICENSE file for more information.](
 Brent Ozar - humans@smartpostgres.com
 
 Project Link: [https://github.com/SmartPostgres/Box-of-Tricks](https://github.com/SmartPostgres/Box-of-Tricks)
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
