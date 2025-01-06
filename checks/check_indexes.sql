@@ -2,8 +2,8 @@
 
 
 CREATE OR REPLACE FUNCTION check_indexes (
-    v_schema_name VARCHAR,
-    v_table_name VARCHAR,
+    v_schema_name VARCHAR default null,
+    v_table_name VARCHAR default null,
     v_warning_format VARCHAR default 'rows',
     v_debug_level INTEGER default 0
 )
