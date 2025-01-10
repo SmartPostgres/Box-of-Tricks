@@ -19,6 +19,7 @@ RETURNS TABLE (
     dead_tuples INTEGER,
     last_autovacuum TIMESTAMPTZ,
     last_manual_nonfull_vacuum TIMESTAMPTZ,
+    fill_factor INTEGER,
     is_unique BOOLEAN,
     is_primary BOOLEAN,
     table_oid INTEGER,
@@ -71,7 +72,8 @@ BEGIN
 		last_analyze TIMESTAMPTZ,
 		last_autoanalyze TIMESTAMPTZ,
 		reloptions TEXT[],
-		drop_object_command VARCHAR
+		drop_object_command VARCHAR,
+		fill_factor INTEGER
     );
 
 	CREATE TEMPORARY TABLE ci_indexes_warnings
@@ -96,7 +98,7 @@ BEGIN
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
 		last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions,
-		n_mod_since_analyze, n_ins_since_vacuum)
+		n_mod_since_analyze, n_ins_since_vacuum, fill_factor)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -135,7 +137,12 @@ BEGIN
 				          AND c.table_name = 'pg_stat_user_tables'
 				          AND c.column_name = 'n_ins_since_vacuum')
 				THEN ' stat.n_ins_since_vacuum '
-				ELSE ' NULL ' END || '
+				ELSE ' NULL ' END || ',
+		COALESCE(
+            NULLIF((regexp_match(c_tbl.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
+            -- Default fillfactor for indexes and tables
+            100
+        ) AS fillfactor
     FROM
         pg_catalog.pg_class c_tbl
     JOIN pg_catalog.pg_namespace nm ON
@@ -200,7 +207,7 @@ BEGIN
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
 		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions, n_mod_since_analyze, n_ins_since_vacuum)
+		last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions, n_mod_since_analyze, n_ins_since_vacuum, fill_factor)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -239,7 +246,12 @@ BEGIN
 				          AND c.table_name = 'pg_stat_user_tables'
 				          AND c.column_name = 'n_ins_since_vacuum')
 				THEN ' stat.n_ins_since_vacuum '
-				ELSE ' NULL ' END || '
+				ELSE ' NULL ' END || ',
+		COALESCE(
+            NULLIF((regexp_match(c_tbl.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
+            -- Default fillfactor for indexes and tables
+            100
+        ) AS fillfactor
     FROM pg_catalog.pg_inherits inh 
     JOIN pg_catalog.pg_class c_tbl ON inh.inhrelid = c_tbl.oid
     JOIN pg_catalog.pg_namespace nm ON
@@ -266,7 +278,8 @@ BEGIN
 	END IF;
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, estimated_tuples, estimated_tuples_as_of, 
-		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
+		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind, reloptions,
+		fill_factor)
     SELECT
         c_tbl.schema_name AS schema_name,
         c_tbl.table_name AS table_name,
@@ -282,7 +295,12 @@ BEGIN
         c_tbl.table_oid AS table_oid,
         c_ix.oid AS index_oid,
         c_ix.relkind,
-		c_ix.reloptions
+		c_ix.reloptions,
+		COALESCE(
+            NULLIF((regexp_match(c_tbl.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
+            -- Default fillfactor for indexes and tables
+            90
+        ) AS fillfactor
     FROM
         ci_indexes c_tbl
     JOIN 
@@ -572,6 +590,7 @@ BEGIN
 		ci.index_type, ci.index_definition, ci.size_kb, ci.estimated_tuples,
 		ci.estimated_tuples_as_of, 
 		ci.dead_tuples, ci.last_autovacuum, ci.last_manual_nonfull_vacuum,
+		ci.fill_factor,
 		ci.is_unique, ci.is_primary,
 		ci.table_oid, ci.index_oid,
 		w.priority, w.warning_summary, w.warning_details, w.url,
