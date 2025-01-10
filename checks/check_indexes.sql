@@ -297,7 +297,7 @@ BEGIN
         c_ix.relkind,
 		c_ix.reloptions,
 		COALESCE(
-            NULLIF((regexp_match(c_tbl.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
+            NULLIF((regexp_match(c_ix.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
             -- Default fillfactor for indexes and tables
             90
         ) AS fillfactor
