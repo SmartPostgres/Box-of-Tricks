@@ -22,19 +22,6 @@ CREATE TABLE public.users (
     "ヅ" VARCHAR
 );
 
--- Set the autovacuum settings
-alter table public.users set (autovacuum_enabled = false);
-
-ALTER TABLE public.users 
-    SET (autovacuum_vacuum_threshold = 500,  -- Minimum number of dead tuples before vacuuming starts
-         autovacuum_vacuum_scale_factor = 0.02,  -- Percentage of the table size that triggers a vacuum
-         autovacuum_analyze_threshold = 500,  -- Minimum number of tuple changes before analyze starts
-         autovacuum_analyze_scale_factor = 0.02,  -- Percentage of the table size that triggers an analyze
-         autovacuum_vacuum_cost_delay = 20,  -- Delay in milliseconds between vacuum operations
-         autovacuum_vacuum_cost_limit = 2000,  -- Cost limit for vacuuming before taking a delay
-         autovacuum_freeze_max_age = 200000000,  -- Maximum age of tuples before forcing a vacuum to prevent transaction wraparound
-         autovacuum_multixact_freeze_max_age = 400000000);  -- Maximum age of multixact before vacuum forces wraparound prevention
-
 -- Optionally, reset the settings back to the default values:
 -- ALTER TABLE sales RESET (autovacuum_enabled, autovacuum_vacuum_threshold, autovacuum_vacuum_scale_factor, 
 --                          autovacuum_analyze_threshold, autovacuum_analyze_scale_factor, autovacuum_vacuum_cost_delay, 
@@ -49,15 +36,16 @@ INSERT INTO public.users
 website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
 select 'John Malkovich', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2024-08-20', '2024-08-20', 'Las Vegas, NV', 'A fictional character', 'A fictional character',
 	'https://SmartPostgres.com', null, 'space space', '1', ' ', '.', ',', '"', 'ヅ'
-from generate_series(1,10000);
+from generate_series(1,50000);
 
+/*
 INSERT INTO public.users
 (display_name, email, reputation, creation_date, last_access_date, "location", about_me, about_me_tsvector, 
 website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
 select 'Jorriss', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2024-08-20', '2024-08-20', 'Orlando, FL', 'A non-fictional character', 'A non-fictional character',
 	'https://www.postgresql.org', null, 'space space', '1', ' ', '.', ',', '"', 'ヅ'
 from generate_series(1,10);
-
+*/
 
 CREATE INDEX idx_users_display_name ON public.users (display_name);
 CREATE INDEX idx_users_email_hash ON public.users USING hash (email);
@@ -89,7 +77,7 @@ INSERT INTO public.users
 website_url, profile_image_url, "space space", "1", " ", ".", ",", """", "ヅ")
 select 'John Malkovich', uuid_in(md5(random()::text || random()::text)::cstring), 1, '2024-08-20', '2024-08-20', 'Las Vegas, NV', 'A fictional character', 'A fictional character',
 	'https://SmartPostgres.com', null, 'space space', '1', ' ', '.', ',', '"', 'ヅ'
-from generate_series(1,10000);
+from generate_series(1,50000);
 
 
 delete from public.users;

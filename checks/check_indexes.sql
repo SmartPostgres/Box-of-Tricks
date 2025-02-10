@@ -2,9 +2,10 @@
 
 
 CREATE OR REPLACE FUNCTION check_indexes (
-    v_schema_name VARCHAR,
-    v_table_name VARCHAR,
-    v_warning_format VARCHAR default 'rows'
+    v_schema_name VARCHAR default null,
+    v_table_name VARCHAR default null,
+    v_warning_format VARCHAR default 'rows',
+    v_debug_level INTEGER default 0
 )
 RETURNS TABLE (
     schema_name TEXT,
@@ -18,6 +19,7 @@ RETURNS TABLE (
     dead_tuples INTEGER,
     last_autovacuum TIMESTAMPTZ,
     last_manual_nonfull_vacuum TIMESTAMPTZ,
+    fill_factor INTEGER,
     is_unique BOOLEAN,
     is_primary BOOLEAN,
     table_oid INTEGER,
@@ -36,11 +38,7 @@ DECLARE
 BEGIN
 
 
-	/* Time bomb because this function is early in development,
-		and we expect fast and furious changes in the first 6 months. */
-    IF CURRENT_DATE > '2024-12-01' THEN
-        RAISE EXCEPTION 'Error: this is an old version of check_indexes. Get the latest from SmartPostgres.com.';
-    END IF;
+	/* v_debug_level: 0 = no messages, 1 = critical messages, 2 = all messages */
 
 	SET lock_timeout = '5s';
 
@@ -68,7 +66,8 @@ BEGIN
 		last_analyze TIMESTAMPTZ,
 		last_autoanalyze TIMESTAMPTZ,
 		reloptions TEXT[],
-		drop_object_command VARCHAR
+		drop_object_command VARCHAR,
+		fill_factor INTEGER
     );
 
 	CREATE TEMPORARY TABLE ci_indexes_warnings
@@ -85,12 +84,15 @@ BEGIN
 
 
     -- Build SQL for Tables & Materialized Views
-	RAISE NOTICE 'Build SQL for Tables & Materialized Views';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Build SQL for Tables & Materialized Views';
+	END IF;
 
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions)
+		last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions,
+		n_mod_since_analyze, n_ins_since_vacuum, fill_factor)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -116,8 +118,25 @@ BEGIN
         CAST(NULL AS INTEGER) AS index_oid,
 		c_tbl.relkind,
         c_tbl.reltoastrelid,
-		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
-		c_tbl.reloptions
+		 stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
+		c_tbl.reloptions, '
+		|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+				        WHERE c.table_schema = 'pg_catalog'
+				          AND c.table_name = 'pg_stat_user_tables'
+				          AND c.column_name = 'n_mod_since_analyze')
+				THEN ' stat.n_mod_since_analyze, '
+				ELSE ' NULL, ' END
+		|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+				        WHERE c.table_schema = 'pg_catalog'
+				          AND c.table_name = 'pg_stat_user_tables'
+				          AND c.column_name = 'n_ins_since_vacuum')
+				THEN ' stat.n_ins_since_vacuum '
+				ELSE ' NULL ' END || ',
+		COALESCE(
+            NULLIF((regexp_match(c_tbl.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
+            -- Default fillfactor for indexes and tables
+            100
+        ) AS fillfactor
     FROM
         pg_catalog.pg_class c_tbl
     JOIN pg_catalog.pg_namespace nm ON
@@ -130,11 +149,17 @@ BEGIN
         AND (c_tbl.relname = ' || COALESCE(quote_literal(v_table_name), 'c_tbl.relname') || ')
         AND c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
 
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
+
     EXECUTE sql_to_execute;
 
 
     -- Build SQL for TOAST Tables
-	RAISE NOTICE 'Build SQL for TOAST Tables';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Build SQL for TOAST Tables';
+	END IF;
 
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
@@ -161,16 +186,22 @@ BEGIN
         ON c_tbl.reltoastrelid = c_toast_tbl.oid
 	WHERE c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
 
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
+
     EXECUTE sql_to_execute;
 
 
     -- Build SQL for the underlying ordinary tables of the partitioned tables
-	RAISE NOTICE 'Build SQL for the underlying ordinary tables of the partitioned tables';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Build SQL for the underlying ordinary tables of the partitioned tables';
+	END IF;
 
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
 		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		n_mod_since_analyze, n_ins_since_vacuum, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions)
+		last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions, n_mod_since_analyze, n_ins_since_vacuum, fill_factor)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -196,8 +227,25 @@ BEGIN
         CAST(NULL AS INTEGER) AS index_oid,
 		c_tbl.relkind,
         c_tbl.reltoastrelid,
-		stat.n_mod_since_analyze, stat.n_ins_since_vacuum, stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
-		c_tbl.reloptions
+		stat.last_vacuum, stat.last_autovacuum, stat.last_analyze, stat.last_autoanalyze,
+		c_tbl.reloptions, '
+		|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+				        WHERE c.table_schema = 'pg_catalog'
+				          AND c.table_name = 'pg_stat_user_tables'
+				          AND c.column_name = 'n_mod_since_analyze')
+				THEN ' stat.n_mod_since_analyze, '
+				ELSE ' NULL, ' END
+		|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+				        WHERE c.table_schema = 'pg_catalog'
+				          AND c.table_name = 'pg_stat_user_tables'
+				          AND c.column_name = 'n_ins_since_vacuum')
+				THEN ' stat.n_ins_since_vacuum '
+				ELSE ' NULL ' END || ',
+		COALESCE(
+            NULLIF((regexp_match(c_tbl.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
+            -- Default fillfactor for indexes and tables
+            100
+        ) AS fillfactor
     FROM pg_catalog.pg_inherits inh 
     JOIN pg_catalog.pg_class c_tbl ON inh.inhrelid = c_tbl.oid
     JOIN pg_catalog.pg_namespace nm ON
@@ -209,16 +257,23 @@ BEGIN
     AND EXISTS (SELECT 1 FROM ci_indexes WHERE inhparent = table_oid)         --Only add in the inheritents of a table you are looking at already
     AND NOT EXISTS (SELECT 1 FROM ci_indexes WHERE c_tbl.oid = table_oid);';  --Don't add it in twice if you asked for null and got all tables above
 
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
+
     EXECUTE sql_to_execute;
 
 
 
 
     -- Build SQL for Indexes
-	RAISE NOTICE 'Build SQL for Indexes';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Build SQL for Indexes';
+	END IF;
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, estimated_tuples, estimated_tuples_as_of, 
-		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
+		dead_tuples, last_autovacuum, last_manual_nonfull_vacuum, is_unique, is_primary, table_oid, index_oid, relkind, reloptions,
+		fill_factor)
     SELECT
         c_tbl.schema_name AS schema_name,
         c_tbl.table_name AS table_name,
@@ -234,7 +289,12 @@ BEGIN
         c_tbl.table_oid AS table_oid,
         c_ix.oid AS index_oid,
         c_ix.relkind,
-		c_ix.reloptions
+		c_ix.reloptions,
+		COALESCE(
+            NULLIF((regexp_match(c_ix.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
+            -- Default fillfactor for indexes and tables
+            90
+        ) AS fillfactor
     FROM
         ci_indexes c_tbl
     JOIN 
@@ -254,11 +314,17 @@ BEGIN
         stat.relid = i.indrelid
 	WHERE c_tbl.relkind NOT IN (''i'', ''I'', ''t'');';
 
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
+
     EXECUTE sql_to_execute;
 
 
 	-- Get Object Sizes Except Stuff Being Vacuumed
-	RAISE NOTICE 'Get Object Sizes Except Stuff Being Vacuumed';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Get Object Sizes Except Stuff Being Vacuumed';
+	END IF;
 	UPDATE ci_indexes tbl
 		SET size_kb = pg_relation_size(COALESCE(tbl.index_oid, tbl.table_oid)) / 1024.0,
 			index_definition = pg_get_indexdef(tbl.index_oid) || ';'
@@ -267,7 +333,9 @@ BEGIN
 
 
 	-- Update partitioned index data to include all child indexes and tables
-	RAISE NOTICE 'Update partitioned index data to include all child indexes and tables';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Update partitioned index data to include all child indexes and tables';
+	END IF;
 
 	UPDATE ci_indexes tbl
 		SET size_kb = child.size_kb,
@@ -302,7 +370,9 @@ BEGIN
 
 
 	-- Set the drop_object_command column contents
-	RAISE NOTICE 'Set the drop_object_command column contents';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Set the drop_object_command column contents';
+	END IF;
 
 	UPDATE ci_indexes ix
 		SET drop_object_command = CASE
@@ -322,7 +392,10 @@ BEGIN
 	-- Process warnings.
 
 	--1: Vacuum Full or Cluster Running Now
-	RAISE NOTICE '1: Vacuum Full or Cluster Running Now';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '1: Vacuum Full or Cluster Running Now';
+	END IF;
+
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 1, 
 		'Vacuum Full or Cluster Running Now' AS warning_summary,
@@ -335,19 +408,23 @@ BEGIN
 			|| ' heap_blks_scanned: ' || prog.heap_blks_scanned
 			|| ' index_rebuild_count: ' || prog.index_rebuild_count
 			 AS warning_details,
-	'https://smartpostgres.com/problems/vacuum_running_now' AS url
+	'https://smartpostgres.com/problems/vacuum-running-now' AS url
 	FROM ci_indexes i
 		JOIN pg_catalog.pg_stat_progress_cluster prog
 			on i.table_oid = prog.relid;
 
 
 	--50: Autovacuum Not Keeping Up
-	RAISE NOTICE '50: Autovacuum Not Keeping Up';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '50: Autovacuum Not Keeping Up';
+	END IF;
+
 	WITH settings AS (
 	    -- Get the default autovacuum settings from the server
 	    SELECT 
 	        (SELECT setting::integer FROM pg_settings WHERE name = 'autovacuum_vacuum_threshold') AS vacuum_threshold,
-	        (SELECT setting::float FROM pg_settings WHERE name = 'autovacuum_vacuum_scale_factor') AS vacuum_scale_factor
+	        (SELECT setting::float FROM pg_settings WHERE name = 'autovacuum_vacuum_scale_factor') AS vacuum_scale_factor,
+	        (SELECT setting::boolean FROM pg_settings WHERE name = 'autovacuum') AS autovacuum_enabled
 	),
 	table_vacuum_settings AS (
 	    -- Calculate the autovacuum thresholds per table
@@ -364,6 +441,11 @@ BEGIN
 	            FROM unnest(c_tbl.reloptions) AS option
 	            WHERE option LIKE 'autovacuum_vacuum_scale_factor%'
 	        ), settings.vacuum_scale_factor) AS autovacuum_vacuum_scale_factor,
+	        COALESCE((
+	            SELECT split_part(option, '=', 2)::boolean
+	            FROM unnest(c_tbl.reloptions) AS option
+	            WHERE option LIKE 'autovacuum_enabled%'
+	        ), settings.autovacuum_enabled) AS autovacuum_enabled,
 	        c_tbl.estimated_tuples
 	    FROM 
 			ci_indexes c_tbl
@@ -379,33 +461,23 @@ BEGIN
 		'Vacuum threshold for this object: '
 			|| (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples))::varchar
 			|| ' tuples.' as warning_details,
-		'https://smartpostgres.com/problems/autovacuum_not_keeping_up' AS url
+		'https://smartpostgres.com/problems/autovacuum-not-keeping-up' AS url
 	FROM 
 	    table_vacuum_settings tvs
 	WHERE 
 	    -- Show tables where dead tuples exceed the effective autovacuum threshold
-	    tvs.n_dead_tup > (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples));
-
-
-	/* BGO FIXFIX:
-		This does not include a percentage threshold above for warning purposes,
-			but just immediately fires if we are even 1 row above the autovacuum
-			threshold, which is probably too noisy. We probably want to alert
-			when we are say 10% over the threshold.
-
-		This query is running by using pg_class.reloptions.
-			I want it to run based on c_tbl.reloptions instead.
-
-		I do not know that the estimated tuple threshold reporting is accurate
-			from the formula written by ChatGPT.
-	*/
+	    tvs.n_dead_tup > (tvs.autovacuum_vacuum_threshold + (tvs.autovacuum_vacuum_scale_factor * tvs.estimated_tuples)) * 1.1
+		AND tvs.autovacuum_enabled <> false;
 
 
 
 
 
 	--100: Outdated Statistics
-	RAISE NOTICE '100: Outdated Statistics';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '100: Outdated Statistics';
+	END IF;
+
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 100, 
 		'Outdated Statistics' AS warning_summary,
@@ -417,28 +489,68 @@ BEGIN
 			|| i.n_mod_since_analyze::varchar || ' mod_since_analyze.' 
 			|| ' last_analyze on ' || COALESCE(i.last_analyze::date::varchar, '(never)')
 			|| '. last_autoanalyze on ' || COALESCE(i.last_autoanalyze::date::varchar, '(never)') AS warning_details,
-	'https://smartpostgres.com/problems/outdated_statistics' AS url
+	'https://smartpostgres.com/problems/outdated-statistics' AS url
 	FROM ci_indexes i
     WHERE ABS(i.estimated_tuples::numeric) * 0.1 < GREATEST(i.n_ins_since_vacuum, i.n_mod_since_analyze);
 
 
 
 	--150: Vacuum Running Now
-	RAISE NOTICE '150: Vacuum Running Now';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '150: Vacuum Running Now';
+	END IF;
+
+    sql_to_execute := '
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 150, 
-		'Vacuum Running Now' AS warning_summary,
-		'The table is online, but maintenance is happening: '
-			|| ' Phase: ' || prog.phase 
-			|| ' heap_blks_total: ' || prog.heap_blks_total
-			|| ' heap_blks_scanned: ' || prog.heap_blks_scanned
-			|| ' heap_blks_vacuumed: ' || prog.heap_blks_vacuumed
-			|| ' index_vacuum_count: ' || prog.index_vacuum_count
-			 AS warning_details,
-	'https://smartpostgres.com/problems/vacuum_running_now' AS url
+		''Vacuum Running Now'' AS warning_summary,
+		''The table is online, but maintenance is happening: ''
+			|| '' Phase: '' || prog.phase 
+			|| '' heap_blks_total: '' || prog.heap_blks_total
+			|| '' heap_blks_scanned: '' || prog.heap_blks_scanned
+			|| '' heap_blks_vacuumed: '' || prog.heap_blks_vacuumed
+			|| '' index_vacuum_count: '' || prog.index_vacuum_count '
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'max_dead_tuple_bytes')
+					THEN ' || '' max_dead_tuple_bytes: '' || prog.max_dead_tuple_bytes '
+					ELSE '' END
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'dead_tuple_bytes')
+					THEN ' || '' dead_tuple_bytes: '' || prog.dead_tuple_bytes '
+					ELSE '' END
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'num_dead_item_ids')
+					THEN ' || '' num_dead_item_ids: '' || prog.num_dead_item_ids '
+					ELSE '' END
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'indexes_total')
+					THEN ' || '' indexes_total: '' || prog.indexes_total '
+					ELSE '' END
+			|| CASE WHEN EXISTS(SELECT 1 FROM information_schema.columns c
+					        WHERE c.table_schema = 'pg_catalog'
+					          AND c.table_name = 'pg_stat_progress_vacuum'
+					          AND c.column_name = 'indexes_processed')
+					THEN ' || '' indexes_processed: '' || prog.indexes_processed '
+					ELSE '' END
+			|| ' AS warning_details,
+	''https://smartpostgres.com/problems/vacuum-running-now'' AS url
 	FROM ci_indexes i
 		JOIN pg_catalog.pg_stat_progress_vacuum prog
-			on i.table_oid = prog.relid;
+			on i.table_oid = prog.relid;';
+
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'sql_to_execute: %', sql_to_execute;
+	END IF;
+
+	EXECUTE sql_to_execute;
 
 
 
@@ -447,19 +559,23 @@ BEGIN
 
 
 	--200: Autovacuum Settings Specified
-	RAISE NOTICE '200: Autovacuum Settings Specified';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '200: Autovacuum Settings Specified';
+	END IF;
 
 	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
 	SELECT i.table_oid, i.index_oid, 200, 
 		'Autovacuum Settings Specified' AS warning_summary,
 		'See the reloptions column for details. Someone set the settings for this specific object.' AS warning_details,
-	'https://smartpostgres.com/problems/autovacuum_settings_specified' AS url
+	'https://smartpostgres.com/problems/autovacuum-settings-specified' AS url
 	FROM ci_indexes i
     WHERE array_to_string(i.reloptions, ', ') like '%autovacuum%';
 
 
     -- Return the result set
-	RAISE NOTICE 'Return the result set';
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE 'Return the result set';
+	END IF;
 
     RETURN QUERY
     SELECT quote_ident(ci.schema_name) as schema_name, 
@@ -468,6 +584,7 @@ BEGIN
 		ci.index_type, ci.index_definition, ci.size_kb, ci.estimated_tuples,
 		ci.estimated_tuples_as_of, 
 		ci.dead_tuples, ci.last_autovacuum, ci.last_manual_nonfull_vacuum,
+		ci.fill_factor,
 		ci.is_unique, ci.is_primary,
 		ci.table_oid, ci.index_oid,
 		w.priority, w.warning_summary, w.warning_details, w.url,
