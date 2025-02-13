@@ -67,7 +67,8 @@ BEGIN
 		last_autoanalyze TIMESTAMPTZ,
 		reloptions TEXT[],
 		drop_object_command VARCHAR,
-		fill_factor INTEGER
+		fill_factor INTEGER,
+		relfrozenxid XID
     );
 
 	CREATE TEMPORARY TABLE ci_indexes_warnings
@@ -92,7 +93,7 @@ BEGIN
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
 		dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
 		last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions,
-		n_mod_since_analyze, n_ins_since_vacuum, fill_factor)
+		n_mod_since_analyze, n_ins_since_vacuum, fill_factor, relfrozenxid)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -136,7 +137,8 @@ BEGIN
             NULLIF((regexp_match(c_tbl.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
             -- Default fillfactor for indexes and tables
             100
-        ) AS fillfactor
+        ) AS fillfactor,
+		c_tbl.relfrozenxid
     FROM
         pg_catalog.pg_class c_tbl
     JOIN pg_catalog.pg_namespace nm ON
@@ -163,7 +165,7 @@ BEGIN
 
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, 
-							dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reloptions)
+							dead_tuples, is_unique, is_primary, table_oid, index_oid, relkind, reloptions, relfrozenxid)
     SELECT
         c_tbl.schema_name AS schema_name,
         c_tbl.table_name AS table_name,
@@ -178,7 +180,8 @@ BEGIN
         c_tbl.table_oid AS table_oid,
         c_toast_tbl.oid AS index_oid,
         c_toast_tbl.relkind AS relkind,
-		c_tbl.reloptions
+		c_tbl.reloptions,
+		c_toast_tbl.relfrozenxid
     FROM
         ci_indexes c_tbl
     JOIN 
@@ -200,8 +203,8 @@ BEGIN
 
     sql_to_execute := '
     INSERT INTO ci_indexes (schema_name, table_name, index_name, index_type, index_definition, estimated_tuples, estimated_tuples_as_of, dead_tuples, 
-		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, 
-		last_manual_nonfull_vacuum, last_autovacuum, last_analyze, last_autoanalyze, reloptions, n_mod_since_analyze, n_ins_since_vacuum, fill_factor)
+		is_unique, is_primary, table_oid, index_oid, relkind, reltoastrelid, last_manual_nonfull_vacuum, last_autovacuum, last_analyze, 
+		last_autoanalyze, reloptions, n_mod_since_analyze, n_ins_since_vacuum, fill_factor, relfrozenxid)
     SELECT
         nm.nspname AS schema_name,
         c_tbl.relname AS table_name,
@@ -245,7 +248,8 @@ BEGIN
             NULLIF((regexp_match(c_tbl.reloptions::text, ''fillfactor=(\d+)''))[1], '''')::int,
             -- Default fillfactor for indexes and tables
             100
-        ) AS fillfactor
+        ) AS fillfactor,
+		c_tbl.relfrozenxid
     FROM pg_catalog.pg_inherits inh 
     JOIN pg_catalog.pg_class c_tbl ON inh.inhrelid = c_tbl.oid
     JOIN pg_catalog.pg_namespace nm ON
@@ -412,6 +416,43 @@ BEGIN
 	FROM ci_indexes i
 		JOIN pg_catalog.pg_stat_progress_cluster prog
 			on i.table_oid = prog.relid;
+
+
+	--10: Transaction ID Wraparound Risk
+	IF v_debug_level >= 2 THEN
+		RAISE NOTICE '10: Transaction ID Wraparound Risk';
+	END IF;
+
+	WITH table_freeze_settings AS (
+	    SELECT 
+	        c.table_oid, c.index_oid,
+	        greatest(age(c.relfrozenxid), age(t.relfrozenxid)) AS greatest_age,
+	        COALESCE(freeze_params.freeze_max_age, s.setting::int) AS freeze_max_age,
+			s.setting::int AS server_default_freeze_max_age
+	    FROM ci_indexes c
+	    LEFT JOIN ci_indexes t ON c.reltoastrelid = t.table_oid
+	    JOIN pg_settings s ON s.name = 'autovacuum_freeze_max_age'
+	    LEFT JOIN LATERAL (
+	        SELECT (regexp_match(unnest(c.reloptions), 'autovacuum_freeze_max_age=(\d+)'))[1]::int AS freeze_max_age
+	        WHERE EXISTS (SELECT 1 FROM unnest(c.reloptions) opt WHERE opt LIKE 'autovacuum_freeze_max_age=%')
+	    ) freeze_params ON TRUE
+	    WHERE c.relkind IN ('r', 'm')
+	)
+	INSERT INTO ci_indexes_warnings (table_oid, index_oid, priority, warning_summary, warning_details, url)
+	SELECT tfs.table_oid, tfs.index_oid, 10, 
+		'Transaction ID Wraparound Risk' AS warning_summary,
+		'Autovacuum was supposed to kick in by now to prevent transaction ID wraparounds, but it has not. '
+			|| ' Transaction age (int, qty of transactions, not date) from relfrozenxid: ' || tfs.greatest_age::varchar
+			|| ' autovacuum_freeze_max_age (also int, qty of transactions) '
+			|| CASE WHEN freeze_max_age = server_default_freeze_max_age THEN ' from server default: '
+				ELSE ' set by table-level override in reloptions: ' END
+			|| tfs.freeze_max_age::varchar
+			 AS warning_details,
+	'https://smartpostgres.com/problems/transaction-id-wraparound' AS url
+	FROM table_freeze_settings tfs
+	WHERE greatest_age >= freeze_max_age;
+
+
 
 
 	--50: Autovacuum Not Keeping Up
