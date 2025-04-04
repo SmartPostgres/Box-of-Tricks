@@ -6,7 +6,7 @@ CREATE OR REPLACE FUNCTION drop_indexes (
     v_drop_primary_keys BOOLEAN DEFAULT FALSE,
     v_force_drop_with_constraints BOOLEAN DEFAULT FALSE,
     v_drop_concurrently BOOLEAN DEFAULT FALSE,
-    v_list_indexes_being_dropped BOOLEAN DEFAULT FALSE,
+    v_list_indexes_being_dropped BOOLEAN DEFAULT TRUE,
     v_print_drops_but_dont_execute BOOLEAN DEFAULT FALSE) 
 RETURNS TABLE (
     status TEXT,
