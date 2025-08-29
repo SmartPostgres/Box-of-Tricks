@@ -38,9 +38,23 @@ DECLARE
 BEGIN
 
 
-	/* v_debug_level: 0 = no messages, 1 = critical messages, 2 = all messages */
+	/* check_indexes from Smart Postgres Box of Tricks
+	 * v0.1, 2025-08-29
+	 * 
+	 * For documentation, help, contributions:
+	 * 		https://github.com/SmartPostgres/Box-of-Tricks/
+	 * 		https://SmartPostgres.com
+	 *
+	 * Open source, MIT license
+	 * 
+	 * Parameters:
+	 * v_schema_name: lets you filter results to just one schema (null = all)
+	 * v_table_name: lets you filter results to just one table (null = all)
+	 * v_warning_level: for future use, not implemented yet
+	 * v_debug_level: 0 = no messages, 1 = critical messages, 2 = all messages 
+	 */
 
-	SET lock_timeout = '5s';
+    SET lock_timeout = '5s';
 
     CREATE TEMPORARY TABLE ci_indexes
     (

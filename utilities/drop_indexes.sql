@@ -21,7 +21,21 @@ DECLARE
 DECLARE
     Status TEXT;
 BEGIN
-    /*Begin by testing parameters
+	/* drop_indexes from Smart Postgres Box of Tricks
+	 * v0.1, 2025-08-29
+	 * 
+	 * For documentation, help, contributions:
+	 * 		https://github.com/SmartPostgres/Box-of-Tricks/
+	 * 		https://SmartPostgres.com
+	 *
+	 * Open source, MIT license
+	 * 
+	 * Parameters that aren't self-explanatory:
+	 * v_schema_name: lets you drop indexes in just one schema (null = all)
+	 * v_table_name: lets you drop indexes in just one table (null = all)
+	 */
+
+	/*Begin by testing parameters
      *Remove these checks if the expected workflow allows for NULL
      *All code below will be written with NULL in mind as it should be safe
      *  that way you can remove these checks if null should be a valid option

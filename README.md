@@ -37,7 +37,6 @@
     <li><a href="#getting-started">Getting Started</a></li>
     <li><a href="#prerequisites">Prerequisites</a></li>
     <li><a href="#usage">Usage</a></li>
-    <li><a href="#roadmap">Roadmap</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
     <li><a href="#contact">Contact</a></li>
@@ -64,9 +63,13 @@ The Box of Tricks works with all currently supported versions of Postgres (as of
 <!-- USAGE EXAMPLES -->
 ## Usage
 
-#### check_indexes
+### check_indexes
 
-This function analyzes the health and design of your indexes. It has 4 parameters:
+This function analyzes the health and design of your indexes.
+
+<img src="./documentation/check_indexes_output.png" width="800">
+
+Parameters include:
 
 <ul>
   <li>v_schema_name - default null (all schemas)</li>
@@ -87,20 +90,48 @@ Or to check a single table:
 
 <pre>select * from check_indexes('my_schema_name', 'my_table_name')</pre>
 
+Output columns include (skipping the ob)
+
+<ul>
+  <li>schema_name</li>
+  <li>table_name</li>
+  <li>index_name</li>
+  <li>index_type - btree, ordinary table, sequence, toast, etc.</li>
+  <li>index_definition - the create statement to reproduce it, useful if you need to put objects into source control or recreate them in other environments</li>
+  <li>size_kb</li>
+  <li>estimated_tuples</li>
+  <li>estimated_tuples_as_of - date</li>
+  <li>dead_tuples</li>
+  <li>last_autovacuum - date</li>
+  <li>last_manual_nonfull_vacuum_ - date</li>
+  <li>fill_factor</li>
+  <li>is_unique</li>
+  <li>is_primary</li>
+  <li>table_oid</li>
+  <li>index_oid</li>
+  <li>priority - if we return a warning about a problem with this object, like autovacuum not keeping up, then the most urgent priorities (like 1) go first, and lower priorities are sorted lower (like 200)</li>
+  <li>warning_summary</li>
+  <li>warning_details</li>
+  <li>url - if we return a warning, you can copy-paste the URL into your browser to learn more about it</li>
+  <li>reloptions</li>
+  <li>drop_object_command - useful if you want to drop specific objects</li>
+</ul>
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
+### drop_indexes
 
+This function does what it says on the label. It's useful for training class attendees who want to reset a table to its base state before doing index tuning.
 
-<!-- ROADMAP -->
-## Roadmap of Upcoming Milestones
+Parameters include:
 
-- [ ] [Version 1.1](https://github.com/SmartPostgres/Box-of-Tricks/milestone/3) - add more options for v_warning_format, add warning for server-level autovacuum changes recommended
-- [ ] [Ideas for Future Features - Help Welcome](https://github.com/SmartPostgres/Box-of-Tricks/milestone/1)
-
-See the [open issues](https://github.com/SmartPostgres/Box-of-Tricks/issues) for a full list of proposed features (and known issues).
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
+<ul>
+  <li>v_schema_name - default null (all schemas), or you can pass in a single schema to focus on just one.</li>
+  <li>v_table_name - default null (all tables), or you can pass in a single schema to focus on just one.</li>
+  <li>v_drop_primary_keys, v_force_drop_with_constraints, v_drop_concurrently - all boolean options that default to false.</li>
+  <li>v_list_indexes_being_dropped - useful if you want confirmation that work was actually done.</li>
+  <li>v_print_drops_but_dont_execute - default false, but set it to true if you want to do a dry run to see what it will delete.</li>
+</ul>
 
 
 <!-- CONTRIBUTING -->
