@@ -57,6 +57,30 @@ BEGIN
     END IF;
     --End Parameter sanitization
 
+    --Begin v_schema_name and v_table_name existence checks
+
+	--Searching for an unqualified table name might lead to some unintended index dropping across schemas
+	--Uncomment this if allowing NULLs in the above parameter sanitization but still want to prevent this edge-case
+	--IF v_schema_name IS NULL AND v_table_name IS NOT NULL THEN
+    --    Status := COALESCE(Status, '') || CASE WHEN COALESCE(Status, '') != '' THEN '|' ELSE 'ERROR: ' END || 'Schema name MUST be passed in when Table Name is passed in';
+	--END IF;
+
+	/*Cannot use to_regclass() with an unqualified tablename
+	 *as it will always return null on odd quoted names like "foo,bar"
+	 */
+	IF v_schema_name IS NULL AND v_table_name IS NOT NULL AND NOT EXISTS (
+        SELECT FROM pg_catalog.pg_class cls WHERE cls.relname = v_table_name
+    ) THEN
+        Status := COALESCE(Status, '') || CASE WHEN COALESCE(Status, '') != '' THEN '|' ELSE 'ERROR: ' END || 'Table ''' || v_table_name || ''' doesn''t exist in any schema';
+	END IF;
+	IF v_schema_name IS NOT NULL AND to_regnamespace(v_schema_name) IS NULL THEN
+        Status := COALESCE(Status, '') || CASE WHEN COALESCE(Status, '') != '' THEN '|' ELSE 'ERROR: ' END || 'Schema name ''' || v_schema_name || ''' doesn''t exist';
+    END IF;
+	IF v_schema_name IS NOT NULL AND v_table_name IS NOT NULL AND to_regclass(v_schema_name || '.' || v_table_name) IS NULL THEN
+        Status := COALESCE(Status, '') || CASE WHEN COALESCE(Status, '') != '' THEN '|' ELSE 'ERROR: ' END || 'Table ''' || v_table_name || ''' doesn''t exist in schema ''' || v_schema_name || '''';
+    END IF;
+	--End existence checks
+
     DROP TABLE IF EXISTS temp_indexes_to_drop;
     CREATE TEMPORARY TABLE temp_indexes_to_drop (
         index_being_dropped TEXT,
